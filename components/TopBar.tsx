@@ -1,0 +1,266 @@
+"use client";
+
+import Link from "next/link";
+import { useFitDensity } from "@/hooks/useFitDensity";
+import { useSessionStore } from "@/lib/session/SessionContext";
+import type { PanelVisibility, Timeframe, ToolProfile, Venue, VenueSelection } from "@/lib/types/market";
+import { FOREX_SYMBOLS } from "@/lib/config/venues";
+import { venueSupports } from "@/lib/adapters/capabilities";
+import { ALL_ASSETS, METALS, venuesWithData } from "@/lib/config/instruments";
+import { FOREX_GROUPS } from "@/lib/config/venues";
+import { AssetLogo, VenueLogo } from "@/components/AssetLogo";
+import { Picker, type PickerOption } from "@/components/ui/Picker";
+import { useUIStore } from "@/lib/store/uiStore";
+import { Wordmark } from "@/components/Logo";
+import { Icon } from "@/components/ui/Icons";
+import { Menu, MenuCheckbox, MenuSection, Segmented } from "@/components/ui/Primitives";
+import AlertsMenu from "@/components/AlertsMenu";
+import RecordingsMenu from "@/components/RecordingsMenu";
+import ExportMenu from "@/components/ExportMenu";
+import LayoutMenu from "@/components/LayoutMenu";
+import RouteNav from "@/components/RouteNav";
+import ThemeMenu from "@/components/ThemeMenu";
+import CommandPalette from "@/components/CommandPalette";
+import { useLayoutStore } from "@/lib/store/layoutStore";
+import { isGridPanelId } from "@/lib/layout/gridPanels";
+
+const TIMEFRAMES: { value: Timeframe; label: string }[] = [
+  { value: "1m", label: "1m" }, { value: "5m", label: "5m" }, { value: "15m", label: "15m" },
+  { value: "30m", label: "30m" }, { value: "1h", label: "1H" }, { value: "4h", label: "4H" },
+];
+const PROFILES: { value: ToolProfile; label: string; title: string }[] = [
+  { value: "order-flow", label: "Order Flow", title: "Footprint, tape, CVD and volume z-score" },
+  { value: "liquidity", label: "Liquidity", title: "Order book, depth, imbalance and traded-volume heatmap" },
+  { value: "volatility", label: "Volatility", title: "Realized volatility, volume z-score and tape" },
+];
+const VENUES: Record<"perpetual" | "spot", { value: Venue; label: string }[]> = {
+  perpetual: [{ value: "okx-futures", label: "OKX Perp" }],
+  spot: [{ value: "okx-spot", label: "OKX Spot" }],
+};
+const PANEL_ITEMS: { key: keyof PanelVisibility; label: string; hint: string; group: "Chart" | "Studies" | "Sidebar" }[] = [
+  { key: "volumeProfile", label: "Session profile", hint: "Volume by price beside the footprint", group: "Chart" },
+  { key: "heatmap", label: "Traded-volume heatmap", hint: "Executed volume by price", group: "Chart" },
+  { key: "cvd", label: "Cumulative delta", hint: "CVD with price overlay", group: "Studies" },
+  { key: "obiRolling", label: "OBI 30m rolling", hint: "Recharts 30m rolling OBI + price", group: "Studies" },
+  { key: "screenerRef", label: "Screener ref", hint: "Built-in OKX screener benchmark", group: "Studies" },
+  { key: "volumeZ", label: "Volume z-score", hint: "Unusual participation", group: "Studies" },
+  { key: "openInterest", label: "Open interest", hint: "OI with price and regime (perps)", group: "Studies" },
+  { key: "liquidations", label: "Liquidations", hint: "Forced longs / shorts per bucket (perps)", group: "Studies" },
+  { key: "venues", label: "Venues", hint: "Price, flow and lead / lag by venue", group: "Studies" },
+  { key: "volatility", label: "Realized volatility", hint: "RV, ATR, Parkinson", group: "Studies" },
+  { key: "depthOfMarket", label: "Market depth", hint: "Cumulative liquidity curve", group: "Studies" },
+  { key: "orderBook", label: "Order book", hint: "Price ladder", group: "Sidebar" },
+  { key: "obi", label: "Book imbalance", hint: "OBI gauge and history", group: "Sidebar" },
+  { key: "timeSales", label: "Time & sales", hint: "Executed prints", group: "Sidebar" },
+];
+
+export default function TopBar() {
+  // 0: full labels · 1: icon-only tools · 2: compact Contribute · 3: two rows.
+  const { ref: topbarRef } = useFitDensity<HTMLElement>(3);
+  const symbol = useSessionStore((s) => s.symbol);
+  const venue = useSessionStore((s) => s.venue);
+  const marketType = useSessionStore((s) => s.marketType);
+  const timeframe = useSessionStore((s) => s.timeframe);
+  const setSymbol = useSessionStore((s) => s.setSymbol);
+  const setVenue = useSessionStore((s) => s.setVenue);
+  const setSelectedVenues = useSessionStore((s) => s.setSelectedVenues);
+  const setMarketType = useSessionStore((s) => s.setMarketType);
+  const setTimeframe = useSessionStore((s) => s.setTimeframe);
+  const panels = useUIStore((s) => s.panels);
+  const toolProfile = useUIStore((s) => s.toolProfile);
+  const setToolProfile = useUIStore((s) => s.setToolProfile);
+  const setPanelVisible = useUIStore((s) => s.setPanelVisible);
+  const layoutMode = useLayoutStore((s) => s.mode);
+  const gridLayout = useLayoutStore((s) => s.layout);
+  const addGridPanel = useLayoutStore((s) => s.addPanel);
+  const removeGridPanel = useLayoutStore((s) => s.removePanel);
+  // During a replay the market is fixed by the recording.
+  const replaying = useSessionStore((s) => s.replay !== null);
+
+  const isForex = marketType === "forex";
+  // Metals picked from the FX list open their aggregated perpetual (real order flow).
+  const METAL_PREFIX = "metal:";
+  const coinOption = (asset: (typeof ALL_ASSETS)[number], kind: "perpetual" | "spot"): PickerOption<string> => {
+    const value = `${asset.base}USDT`;
+    const venues = venuesWithData(value, kind).length;
+    return {
+      value,
+      label: asset.kind === "metal" ? `${asset.base}/USDT` : value,
+      sub: asset.name,
+      // Common spellings: "BTCUSD", and for metals "XAUUSD" / "XAUSD".
+      keywords: `${asset.base} ${asset.name} ${asset.base}USD${asset.kind === "metal" ? ` ${asset.base}SD` : ""}`,
+      icon: <AssetLogo symbol={value} size={22} />,
+      group: asset.kind === "metal" ? "Metals" : "Crypto",
+      trailing: `${venues} venue${venues === 1 ? "" : "s"}`,
+    };
+  };
+  const instrumentOptions: PickerOption<string>[] = isForex
+    ? [
+        ...FOREX_SYMBOLS.map((pair) => ({
+          value: pair,
+          label: pair,
+          sub: FOREX_GROUPS[pair] === "Majors" ? "Major" : "Cross / exotic",
+          icon: <AssetLogo symbol={pair} size={22} />,
+          group: `FX ${FOREX_GROUPS[pair] === "Majors" ? "majors" : "crosses & exotics"}`,
+        })),
+        ...METALS.map((metal) => ({
+          value: `${METAL_PREFIX}${metal.base}USDT`,
+          label: `${metal.base}/USD`,
+          sub: `${metal.name} · perpetual order flow`,
+          keywords: `${metal.base} ${metal.name} ${metal.base}USD ${metal.base}USDT ${metal.base}SD`,
+          icon: <AssetLogo symbol={`${metal.base}USDT`} size={22} />,
+          group: "Metals",
+          trailing: `${metal.perp.length} venues`,
+        })),
+      ]
+    : ALL_ASSETS.filter((asset) => venuesWithData(`${asset.base}USDT`, marketType).length > 0).map((asset) =>
+        coinOption(asset, marketType === "spot" ? "spot" : "perpetual")
+      );
+  const venueOptions = marketType === "perpetual" || marketType === "spot" ? VENUES[marketType] : [];
+  const aggregateValue: VenueSelection = marketType === "perpetual" ? "all-perps" : "all-spot";
+
+  const aggregateFor = (sym: string) =>
+    venueOptions.filter((v) => venueSupports(v.value, sym, marketType)).map((v) => v.value);
+
+  const chooseSymbol = (next: string) => {
+    if (next.startsWith(METAL_PREFIX)) {
+      // From FX: switch to the metal's aggregated perpetual across every venue that trades it.
+      const metal = next.slice(METAL_PREFIX.length);
+      setMarketType("perpetual");
+      setSymbol(metal);
+      setVenue("all-perps");
+      setSelectedVenues([...venuesWithData(metal, "perpetual")]);
+      return;
+    }
+    setSymbol(next);
+    if (isForex) return;
+    if (venue === aggregateValue) setSelectedVenues(aggregateFor(next));
+    else if (!venueSupports(venue as Venue, next, marketType)) {
+      // The current exchange doesn't list this coin: fall back to the first one that does.
+      const fallback = venueOptions.find((v) => venueSupports(v.value, next, marketType));
+      if (fallback) setVenue(fallback.value);
+    }
+  };
+
+  const venuePickerOptions: PickerOption<VenueSelection>[] = venueOptions.map((v) => ({
+    value: v.value as VenueSelection,
+    label: v.label,
+    sub: venueSupports(v.value, symbol, marketType) ? "OKX WebSocket v5" : `No ${symbol} market`,
+    disabled: !venueSupports(v.value, symbol, marketType),
+    icon: <VenueLogo venue={v.value} size={20} />,
+  }));
+
+  const chooseVenue = (next: VenueSelection) => {
+    setVenue(next);
+    if (next === aggregateValue) {
+      setSelectedVenues(aggregateFor(symbol));
+    }
+  };
+
+  return (
+    <header className="topbar" ref={topbarRef}>
+      <Link className="brand" href="/" aria-label="orderflow home">
+        <Wordmark size={28} />
+      </Link>
+      <RouteNav />
+
+      <fieldset className="topbar-market" disabled={replaying} title={replaying ? "Exit the replay to change the market" : undefined}>
+      <div className="topbar-group">
+        <Segmented
+          value={marketType}
+          onChange={(next) => {
+            if (next === marketType) return;
+            setMarketType(next);
+            if (next === "forex") setSymbol("EUR/USD");
+            else if (isForex || venuesWithData(symbol, next).length === 0) setSymbol("BTCUSDT");
+          }}
+          options={[
+            { value: "perpetual", label: "Perp", title: "Crypto perpetual futures" },
+            { value: "spot", label: "Spot", title: "Crypto spot" },
+            { value: "forex", label: "FX", title: "Foreign exchange" },
+          ]}
+          ariaLabel="Market"
+        />
+      </div>
+
+      <div className="topbar-group">
+        <Picker
+          searchable
+          className="instrument-picker"
+          value={symbol}
+          options={instrumentOptions}
+          onChange={chooseSymbol}
+          ariaLabel="Instrument"
+          width={300}
+        />
+        {!isForex && (
+          <Picker
+            value={venue}
+            options={venuePickerOptions}
+            onChange={chooseVenue}
+            ariaLabel="Venue"
+            width={260}
+          />
+        )}
+      </div>
+
+      <div className="topbar-group">
+        <Segmented accent value={timeframe} onChange={setTimeframe} options={TIMEFRAMES} ariaLabel="Candle interval" />
+      </div>
+      </fieldset>
+
+      <div className="topbar-spacer" />
+
+      <div className="topbar-group topbar-tools">
+        <AlertsMenu />
+        <RecordingsMenu />
+        <ExportMenu />
+      </div>
+
+      <div className="topbar-group">
+        {layoutMode === "classic" && <Segmented value={toolProfile} onChange={setToolProfile} options={PROFILES} ariaLabel="Workspace" />}
+        <LayoutMenu />
+        <Menu hint="Panels" label={<><Icon.Layout /><span className="hide-compact">Panels</span></>}>
+          {(["Chart", "Studies", "Sidebar"] as const).map((group) => (
+            <MenuSection key={group} title={group}>
+              {PANEL_ITEMS.filter((item) => item.group === group).map((item) => (
+                <MenuCheckbox
+                  key={item.key}
+                  checked={layoutMode === "grid" && isGridPanelId(item.key) ? gridLayout.some((g) => g.i === item.key) : panels[item.key]}
+                  onChange={(checked) => {
+                    // In grid mode panels are placed on (or removed from) the grid.
+                    if (layoutMode === "grid" && isGridPanelId(item.key)) {
+                      if (checked) addGridPanel(item.key);
+                      else removeGridPanel(item.key);
+                    } else setPanelVisible(item.key, checked);
+                  }}
+                  label={item.label}
+                  hint={item.hint}
+                />
+              ))}
+            </MenuSection>
+          ))}
+        </Menu>
+        <ThemeMenu />
+        <CommandPalette
+          onSelectInstrument={(nextSym, nextMarket) => {
+            if (replaying) return;
+            if (nextMarket !== marketType) setMarketType(nextMarket);
+            chooseSymbol(nextSym);
+          }}
+        />
+      </div>
+
+      <Link
+        className="ui-button contribute-button is-primary"
+        href="/screener"
+        aria-label="Open built-in OrderFlow Screener"
+        data-hint="Built-in OrderFlow Screener"
+      >
+        <Icon.Pulse />
+        <span className="contribute-label">Screener Ref</span>
+      </Link>
+      <span className="topbar-break" aria-hidden />
+    </header>
+  );
+}

@@ -1,0 +1,69 @@
+import { connection, NextResponse } from "next/server";
+import { getRelayChannel } from "@/server/terminalRelay";
+import { venueSupports } from "@/lib/adapters/capabilities";
+import type { MarketType, Venue } from "@/lib/types/market";
+
+export async function GET(request: Request) {
+  await connection();
+  const { searchParams } = new URL(request.url);
+  const venue = searchParams.get("venue") as Venue | null;
+  const symbol = searchParams.get("symbol");
+  const marketType = (searchParams.get("marketType") ?? "perpetual") as MarketType;
+
+  if (!venue || !symbol || !venueSupports(venue, symbol, marketType)) {
+    return NextResponse.json({ error: "Unsupported venue/symbol/marketType" }, { status: 400 });
+  }
+
+  const channel = getRelayChannel(venue, symbol, marketType);
+  const encoder = new TextEncoder();
+  let cleanup: (() => void) | null = null;
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (chunk: string) => {
+        try {
+          controller.enqueue(encoder.encode(chunk));
+        } catch {
+          cleanup?.();
+        }
+      };
+
+      send(": connected\n\n");
+
+      const unsubscribe = channel.subscribe((event) => {
+        send(`event: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+      });
+
+      const keepAlive = setInterval(() => {
+        send(": keepalive\n\n");
+      }, 15_000);
+
+      cleanup = () => {
+        clearInterval(keepAlive);
+        unsubscribe();
+      };
+
+      request.signal.addEventListener("abort", () => {
+        cleanup?.();
+        try {
+          controller.close();
+        } catch {
+          // Already closed.
+        }
+      });
+    },
+    cancel() {
+      cleanup?.();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-store, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
