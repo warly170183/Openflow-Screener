@@ -212,7 +212,7 @@ export default function ArchitectureView() {
               Flujo Order Flow, Opciones de Trading y Gráficos sobre OKX
             </h1>
             <p className="mt-1.5 text-[13.5px] leading-relaxed text-text-secondary">
-              Mapa técnico actualizado automáticamente con cada módulo que añadimos: desde el WebSocket OKX y el relay multi-temporalidad hasta VAP HVN, tema Sepia, Opciones de Trading con proyección en vivo y liquidez L2 cercana, y Gráficos Interactivos con Footprint y velas con niveles de liquidez.
+              Mapa técnico actualizado automáticamente con cada módulo que añadimos: desde el WebSocket OKX y el relay multi-temporalidad hasta VAP HVN, tema Sepia, Opciones de Trading con proyección en vivo y liquidez L2 cercana, y Gráficos Interactivos con Footprint, velas con niveles de liquidez y Ciclo de Wyckoff con marcadores y tooltips de precio, volumen y hora.
             </p>
           </div>
 

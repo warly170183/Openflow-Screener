@@ -20,6 +20,7 @@ import {
 import MarketSubpageHeader from "@/components/MarketSubpageHeader";
 import FootprintChart from "@/components/FootprintChart";
 import LiquidityCandlesChart from "@/components/LiquidityCandlesChart";
+import WyckoffCycleChart from "@/components/WyckoffCycleChart";
 import { useSessionStore } from "@/lib/session/SessionContext";
 import { useUIStore } from "@/lib/store/uiStore";
 import { useTimeframeKlines } from "@/hooks/useTimeframeKlines";
@@ -212,7 +213,7 @@ export default function InteractiveChartsView() {
               Telemetría Numérica del Terminal en Gráficos Dinámicos
             </h1>
             <p className="mt-1 text-[13px] text-text-secondary">
-              Footprint interactivo Canvas DPR en vivo, gráfico de velas con niveles de liquidez del libro L2 y toda la telemetría del Terminal actualizándose con cada tick.
+              Footprint interactivo Canvas DPR en vivo, gráfico de velas con niveles de liquidez del libro L2, Ciclo de Mercado de Wyckoff y toda la telemetría del Terminal actualizándose con cada tick.
             </p>
           </div>
 
@@ -340,6 +341,18 @@ export default function InteractiveChartsView() {
           orderBook={aggregatedBook ?? orderBook}
           volumeProfile={volumeProfile}
           hvnThreshold={hvnThreshold}
+        />
+
+        {/* Wyckoff Market Cycle Visualization */}
+        <WyckoffCycleChart
+          symbol={symbol}
+          timeframe={timeframe}
+          decimals={decimals}
+          bars={klineBars}
+          livePrice={livePrice}
+          session={session}
+          volumeProfile={volumeProfile}
+          currentOBI={currentOBI}
         />
 
         {/* Chart Grid Row 1: Price+BB+VWAP + Aggressive Buy/Sell & CVD */}

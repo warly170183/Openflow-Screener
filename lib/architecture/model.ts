@@ -213,20 +213,21 @@ export const ARCH_NODES: ArchNode[] = [
       "lib/engine/analytics.ts",
       "lib/engine/tradingOptions.ts",
       "lib/engine/liquidityLevels.ts",
+      "lib/engine/wyckoff.ts",
       "lib/engine/obiRolling.ts",
       "lib/engine/microstructure.ts",
       "hooks/useTimeframeKlines.ts",
     ],
     perspectives: ["full", "terminal", "trading", "resilience"],
     summary:
-      "Núcleo analítico del cliente. Reagrega trades al cambiar temporalidad sin desconectar sockets, detecta nodos VAP HVN, extrae muros/niveles de liquidez L2 y calcula ATR(14) + Bandas de Bollinger para Entrada, TP1, TP2 y Stop Loss.",
+      "Núcleo analítico del cliente. Reagrega trades al cambiar temporalidad, detecta nodos VAP HVN, extrae muros de liquidez L2, clasifica el Ciclo de Wyckoff en vivo y calcula ATR(14) + Bandas de Bollinger para Entrada, TP1, TP2 y Stop Loss.",
     responsibilities: [
       "Reagrega instantáneamente el buffer histórico de trades si el usuario cambia entre 1m, 5m, 15m, 30m, 1H y 4H.",
-      "analyzeHighVolumeNodes() detecta clusters de alto volumen (HVN) y extractLiquidityLevels() identifica muros y piscinas Bid/Ask del libro L2.",
+      "analyzeHighVolumeNodes() detecta clusters HVN, extractLiquidityLevels() identifica muros Bid/Ask y analyzeWyckoffCycle() clasifica Acumulación/Markup/Distribución/Markdown.",
       "evaluateTradingOptions() combina Wilder ATR(14), Bollinger Bands(20, 2σ), VWAP, OBI y Delta para calibrar SL, Entrada, TP1/TP2 y riesgo 2–3%.",
     ],
     inputs: ["Eventos normalizados en vivo, libro L2 y velas OKX multi-temporalidad"],
-    outputs: ["FootprintCandles, HVN zones, LiquidityLevel[], Rolling OBI 30m, TradeSetupOptions[]"],
+    outputs: ["FootprintCandles, HVN zones, LiquidityLevel[], WyckoffAnalysis, TradeSetupOptions[]"],
   },
   {
     id: "stores-session",
@@ -334,6 +335,7 @@ export const ARCH_NODES: ArchNode[] = [
       "components/TradeOperationChart.tsx",
       "components/InteractiveChartsView.tsx",
       "components/LiquidityCandlesChart.tsx",
+      "components/WyckoffCycleChart.tsx",
       "components/FootprintChart.tsx",
       "components/MarketSubpageHeader.tsx",
       "app/trading-options/page.tsx",
@@ -341,15 +343,15 @@ export const ARCH_NODES: ArchNode[] = [
     ],
     perspectives: ["full", "trading"],
     summary:
-      "Dos pestañas especializadas conectadas a la misma sesión viva: Opciones de Trading (operación con niveles de liquidez cercanos y gráfico modal en vivo) y Gráficos Interactivos (Footprint Canvas + Gráfico de Velas con Niveles de Liquidez + Recharts).",
+      "Dos pestañas especializadas conectadas a la misma sesión viva: Opciones de Trading (operación con liquidez cercana y visor modal) y Gráficos Interactivos (Footprint Canvas + Velas con Liquidez + Ciclo de Wyckoff con tooltips de marcadores + Recharts).",
     responsibilities: [
       "TradingOptionsView y TradeOperationChart proyectan Entrada, Stop Loss, TP1, TP2 y piscinas de liquidez cercanas en modo Velas+BB o Tick a Tick 1s.",
-      "LiquidityCandlesChart renderiza velas OHLC en vivo del activo superponiendo muros y niveles de liquidez Bid/Ask del libro L2 más nodos POC/HVN.",
-      "InteractiveChartsView integra FootprintChart Canvas DPR junto a LiquidityCandlesChart y los 6 paneles Recharts dinámicos.",
+      "LiquidityCandlesChart y WyckoffCycleChart grafican velas OHLC con muros L2 y el Ciclo de Wyckoff con marcadores de fase (PS, SC, AR, ST, Spring, SOS, BC, UTAD, SOW) y tooltips interactivos de precio, volumen y hora.",
+      "InteractiveChartsView integra FootprintChart Canvas DPR junto a LiquidityCandlesChart, WyckoffCycleChart y los 6 paneles Recharts dinámicos.",
       "MarketSubpageHeader comparte selectores de activo y temporalidad con el Terminal sin reconectar sockets.",
     ],
-    inputs: ["SessionStore vivo, klines por temporalidad, libro L2 OKX y análisis ATR/Bollinger"],
-    outputs: ["Proyección de operaciones con liquidez cercana, velas con muros L2 y Footprint en vivo"],
+    inputs: ["SessionStore vivo, klines por temporalidad, libro L2 OKX y análisis ATR/Bollinger/Wyckoff"],
+    outputs: ["Proyección de operaciones con liquidez cercana, velas con muros L2, Ciclo Wyckoff y Footprint"],
   },
 ];
 
@@ -604,6 +606,46 @@ export const CADENCE_METRICS: CadenceMetric[] = [
 ];
 
 export const ARCH_CHANGELOG: ArchitectureChangeEntry[] = [
+  {
+    id: "chg-wyckoff-tooltips",
+    version: "v2.9",
+    title: "Tooltips Interactivos y Marcadores de Fase en el Gráfico de Wyckoff",
+    category: "Visualización y UX",
+    nodeId: "analytics-views",
+    summary:
+      "Se enriquecieron ambos gráficos del Ciclo de Wyckoff en Gráficos Interactivos (/interactive-charts) con marcadores de fase reales (PS, SC, AR, ST, Spring, SOS, JAC, PSY, BC, UTAD, SOW) y tooltips interactivos que muestran precio, volumen relativo y hora exacta al pasar el cursor.",
+    details: [
+      "analyzeWyckoffCycle() ahora ancla cada evento Wyckoff a su vela OHLCV real de OKX en series[].marker y enriquece los 24 puntos de curvePoints con precio, volumen, ratio vs media y timestamp.",
+      "Tanto la curva ideal de Wyckoff como el gráfico de estructura Ice/Creek dibujan marcadores visibles sobre los nodos detectados y muestran tooltips detallados (Precio, Volumen ×media y Hora) junto a un resumen cronológico inferior.",
+    ],
+    files: [
+      "lib/engine/wyckoff.ts",
+      "components/WyckoffCycleChart.tsx",
+      "__tests__/wyckoff.test.ts",
+      "lib/architecture/model.ts",
+      "components/ArchitectureView.tsx",
+    ],
+  },
+  {
+    id: "chg-wyckoff-cycle",
+    version: "v2.8",
+    title: "Gráfico Interactivo del Ciclo de Wyckoff en Gráficos Interactivos",
+    category: "Trading y Análisis",
+    nodeId: "analytics-views",
+    summary:
+      "Se añadió el detector cuantitativo y visor dual del Ciclo de Mercado de Wyckoff dentro de Gráficos Interactivos (/interactive-charts) para identificar en tiempo real en qué fase se encuentra el activo.",
+    details: [
+      "Motor analyzeWyckoffCycle() evalúa el rango estructural (Ice/Creek), movimiento previo, pendiente EMA, esfuerzo vs resultado en volumen, eventos Spring/UTAD y confirmación de Order Flow (OBI/Delta).",
+      "Muestra un stepper de las 4 macro-fases (1. Acumulación → 2. Markup → 3. Distribución → 4. Markdown), un mapa del ciclo completo señalando exactamente el punto «AHORA» y la estructura de precio real con niveles Ice, Creek y Equilibrio 50%.",
+    ],
+    files: [
+      "lib/engine/wyckoff.ts",
+      "components/WyckoffCycleChart.tsx",
+      "components/InteractiveChartsView.tsx",
+      "lib/architecture/model.ts",
+      "components/ArchitectureView.tsx",
+    ],
+  },
   {
     id: "chg-liquidity-levels-candles",
     version: "v2.7",
