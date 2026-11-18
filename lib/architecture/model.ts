@@ -343,10 +343,10 @@ export const ARCH_NODES: ArchNode[] = [
     ],
     perspectives: ["full", "trading"],
     summary:
-      "Dos pestañas especializadas conectadas a la misma sesión viva: Opciones de Trading (operación con liquidez cercana y visor modal) y Gráficos Interactivos (Footprint Canvas + Velas con Liquidez + Ciclo de Wyckoff con tooltips de marcadores + Recharts).",
+      "Dos pestañas especializadas conectadas a la misma sesión viva: Opciones de Trading (operación con liquidez cercana y visor modal) y Gráficos Interactivos (Footprint Canvas + Velas con Liquidez + Ciclo de Wyckoff + Clímax + MACD + Trend Strength ADX + Duración de Fases + Overlay Histórico + Volume Profile POC/VA por Fase + Recharts).",
     responsibilities: [
       "TradingOptionsView y TradeOperationChart proyectan Entrada, Stop Loss, TP1, TP2 y piscinas de liquidez cercanas en modo Velas+BB o Tick a Tick 1s.",
-      "LiquidityCandlesChart y WyckoffCycleChart grafican velas OHLC con muros L2 y el Ciclo de Wyckoff con marcadores de fase (PS, SC, AR, ST, Spring, SOS, BC, UTAD, SOW) y tooltips interactivos de precio, volumen y hora.",
+      "LiquidityCandlesChart y WyckoffCycleChart grafican velas OHLC con muros L2 y el Ciclo de Wyckoff con marcadores, fechas, Volumen Clímax, MACD(12,26,9), Trend Strength (ADX/+DI/-DI), duración por fase, Overlay Historical Cycles y barra lateral de Volume Profile (POC y Value Area 70%) por fase.",
       "InteractiveChartsView integra FootprintChart Canvas DPR junto a LiquidityCandlesChart, WyckoffCycleChart y los 6 paneles Recharts dinámicos.",
       "MarketSubpageHeader comparte selectores de activo y temporalidad con el Terminal sin reconectar sockets.",
     ],
@@ -606,6 +606,114 @@ export const CADENCE_METRICS: CadenceMetric[] = [
 ];
 
 export const ARCH_CHANGELOG: ArchitectureChangeEntry[] = [
+  {
+    id: "chg-wyckoff-trend-strength-adx",
+    version: "v2.15",
+    title: "Indicador Trend Strength (ADX 14) Sincronizado en Ciclo de Wyckoff",
+    category: "Indicadores",
+    nodeId: "analytics-views",
+    summary:
+      "Se añadió el indicador 'Trend Strength (ADX)' basado en el Average Directional Index de Wilder (ADX, +DI y -DI) sincronizado con el Ciclo de Wyckoff en Gráficos Interactivos (/interactive-charts) para cuantificar la fuerza tendencial frente a fases laterales de rango.",
+    details: [
+      "analyzeWyckoffCycle() implementa wilderAdxSeries() sobre las velas con precalentamiento para obtener ADX, +DI y -DI, clasificando el régimen en Rango Lateral (<20), Transición (20–25), Tendencia Activa (25–40) o Tendencia Muy Fuerte (≥40).",
+      "WyckoffCycleChart incorpora el botón 'Trend Strength (ADX)', un gráfico sincronizado (syncId='wyckoff-structure') con bandas de régimen (<20 rango vs ≥25 tendencia), umbrales 20/25/40 y marcadores Wyckoff superpuestos.",
+      "El tooltip y la tarjeta resumen muestran ADX actual, dominancia +DI/-DI, pendiente Δ3v y diagnóstico tendencial en vivo.",
+    ],
+    files: ["lib/engine/wyckoff.ts", "components/WyckoffCycleChart.tsx"],
+  },
+  {
+    id: "chg-wyckoff-phase-volume-profile",
+    version: "v2.14",
+    title: "Volume Profile Side-Bar (POC y Value Area) por Fase Wyckoff",
+    category: "Indicadores",
+    nodeId: "analytics-views",
+    summary:
+      "Se añadió una barra lateral de Volume Profile junto al gráfico de Estructura de Precio Real del Ciclo de Wyckoff (/interactive-charts) que calcula y muestra el Point of Control (POC) y el Value Area (70% VAL–VAH) específicos de cada fase Wyckoff identificada.",
+    details: [
+      "analyzeWyckoffCycle() genera `phaseVolumeProfiles` distribuyendo el volumen real de cada episodio identificado (Acumulación, Markup, Distribución, Markdown) en 20 niveles de precio para extraer POC, VAL, VAH y densidad relativa.",
+      "WyckoffCycleChart incluye el botón 'Volume Profile', pestañas por cada fase detectada para inspeccionar su perfil horizontal, tooltip por nivel de precio y comparativa rápida de POC/VA entre fases.",
+      "Cuando el POC de la fase seleccionada cae dentro del rango de precio visible, la línea POC y la banda del Value Area se proyectan directamente sobre el gráfico de Estructura Real.",
+    ],
+    files: ["lib/engine/wyckoff.ts", "components/WyckoffCycleChart.tsx"],
+  },
+  {
+    id: "chg-wyckoff-historical-overlay",
+    version: "v2.13",
+    title: "Superposición de Ciclos Históricos de Wyckoff (Overlay Historical Cycles)",
+    category: "Trading y Análisis",
+    nodeId: "analytics-views",
+    summary:
+      "Se integró el interruptor 'Overlay Historical Cycles' y el selector de episodios pasados en Gráficos Interactivos (/interactive-charts) para proyectar un ciclo histórico previo sobre la curva ideal y sobre el precio real anclado al inicio de la fase activa.",
+    details: [
+      "analyzeWyckoffCycle() extrae episodios históricos normalizados (retornos base-1 y mapeo a escala ideal 0–100) priorizando ciclos previos de la misma macro-fase.",
+      "projectHistoricalCycleOverlay() ancla la trayectoria histórica al cierre inicial de la fase actual (`currentPhaseStartIndex`) y calcula madurez relativa (%), velas restantes estimadas y diferencial de progresión (%).",
+      "WyckoffCycleChart añade el botón 'Overlay Historical Cycles', selector desplegable de episodio y trazos discontinuos en ambos gráficos con tooltips comparativos.",
+    ],
+    files: ["lib/engine/wyckoff.ts", "components/WyckoffCycleChart.tsx"],
+  },
+  {
+    id: "chg-wyckoff-phase-durations",
+    version: "v2.12",
+    title: "Panel Estadístico de Duración Media por Fase y Madurez Wyckoff",
+    category: "Trading y Análisis",
+    nodeId: "analytics-views",
+    summary:
+      "Se añadió un panel estadístico debajo del Ciclo de Wyckoff en Gráficos Interactivos (/interactive-charts) que calcula la duración promedio histórica (horas y días) de Acumulación, Markup, Distribución y Markdown sobre hasta 240 velas OKX para medir la madurez del ciclo actual.",
+    details: [
+      "analyzeWyckoffCycle() segmenta el historial completo en episodios continuos por macro-fase, suaviza ruido de 1 vela y calcula duración media en horas/días, velas por episodio y porcentaje del historial.",
+      "Compara el tiempo transcurrido en la fase activa frente a su media histórica para calcular el porcentaje de madurez (Temprana, En desarrollo, Avanzada o Madura / Probable transición).",
+      "InteractiveChartsView amplía useTimeframeKlines(240) para nutrir la estadística histórica de fases sin alterar la ventana operativa del resto de paneles.",
+    ],
+    files: [
+      "lib/engine/wyckoff.ts",
+      "components/WyckoffCycleChart.tsx",
+      "components/InteractiveChartsView.tsx",
+      "__tests__/wyckoff.test.ts",
+      "lib/architecture/model.ts",
+      "components/ArchitectureView.tsx",
+    ],
+  },
+  {
+    id: "chg-wyckoff-macd-dates",
+    version: "v2.11",
+    title: "Indicador MACD (12,26,9) y Fechas Exactas en el Ciclo de Wyckoff",
+    category: "Indicadores",
+    nodeId: "analytics-views",
+    summary:
+      "Se añadió el indicador visual MACD (12, 26, 9) sincronizado debajo del Ciclo de Wyckoff para confirmar cambios de momentum entre fases, junto con fechas y horas explícitas en ejes, cabecera, punto AHORA y tarjetas de fase.",
+    details: [
+      "analyzeWyckoffCycle() precalienta EMA(12)/EMA(26) hasta con 110 velas previas, calcula MACD, Señal(9), Histograma y cruces alcistas/bajistas (bullish/bearish) con ventana temporal exacta (windowStartTime → windowEndTime).",
+      "WyckoffCycleChart añade un panel MACD interactivo toggleable sincronizado mediante `syncId=\"wyckoff-structure\"`, resaltando cruces y líneas verticales sobre las fases Wyckoff (SC, Spring, SOS, BC, UTAD, SOW).",
+      "Todos los ejes X, tooltips, tarjetas de marcadores y el punto AHORA ahora muestran fecha y hora (DD/MM HH:mm) para ubicar con precisión el momento actual del ciclo.",
+    ],
+    files: [
+      "lib/engine/wyckoff.ts",
+      "components/WyckoffCycleChart.tsx",
+      "__tests__/wyckoff.test.ts",
+      "lib/architecture/model.ts",
+      "components/ArchitectureView.tsx",
+    ],
+  },
+  {
+    id: "chg-wyckoff-volume-climax",
+    version: "v2.10",
+    title: "Histograma Secundario de Volumen, Churn y Clímax en Wyckoff",
+    category: "Trading y Análisis",
+    nodeId: "analytics-views",
+    summary:
+      "Se integró un histograma secundario sincronizado debajo del Ciclo de Wyckoff en Gráficos Interactivos (/interactive-charts) que detecta y resalta eventos de alto churn/absorción y picos climáticos correlacionados con los marcadores de fase.",
+    details: [
+      "analyzeWyckoffCycle() clasifica cada vela OKX según volumen relativo (umbral Clímax ≥1.5× media) y relación cuerpo/amplitud para detectar Churn institucional (alto volumen con absorción).",
+      "WyckoffCycleChart renderiza un BarChart inferior acoplado mediante `syncId=\"wyckoff-structure\"`, líneas de referencia Media 1× y Clímax 1.5×, líneas verticales por marcador de fase (SC, Spring, BC, UTAD, etc.) y tooltips sincronizados.",
+    ],
+    files: [
+      "lib/engine/wyckoff.ts",
+      "components/WyckoffCycleChart.tsx",
+      "__tests__/wyckoff.test.ts",
+      "lib/architecture/model.ts",
+      "components/ArchitectureView.tsx",
+    ],
+  },
   {
     id: "chg-wyckoff-tooltips",
     version: "v2.9",

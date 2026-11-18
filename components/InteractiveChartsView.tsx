@@ -62,7 +62,7 @@ export default function InteractiveChartsView() {
   const [flowResolution, setFlowResolution] = useState<FlowBucketSec>(5);
   const [liquidityTab, setLiquidityTab] = useState<"depth" | "obi">("depth");
 
-  const { bars: klineBars } = useTimeframeKlines(80);
+  const { bars: klineBars } = useTimeframeKlines(240);
   const allFlow = useMemo(() => (liveBar ? [...flowBars, liveBar] : flowBars), [flowBars, liveBar]);
   const livePrice = ticker?.price ?? session?.last ?? allFlow.at(-1)?.close ?? klineBars.at(-1)?.close ?? 0;
   const decimals = priceDecimals(tickSize, livePrice);

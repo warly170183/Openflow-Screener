@@ -152,15 +152,111 @@ export interface WyckoffPricePoint {
   low: number;
   volume: number;
   volumeRatio: number;
+  isBull: boolean;
+  spreadPct: number;
+  bodyRatio: number;
+  isChurn: boolean;
+  isClimax: boolean;
+  effortLabel: string;
   emaFast: number;
+  macdLine: number;
+  macdSignal: number;
+  macdHistogram: number;
+  macdCross: "bullish" | "bearish" | null;
+  adx: number;
+  plusDi: number;
+  minusDi: number;
   creek: number;
   ice: number;
   equilibrium: number;
   marker?: WyckoffPhaseMarker;
 }
 
+export interface WyckoffPhaseDurationStat {
+  stage: WyckoffMacroStage;
+  label: string;
+  shortLabel: string;
+  occurrences: number;
+  avgDurationMs: number;
+  avgDurationHours: number;
+  avgDurationDays: number;
+  avgBars: number;
+  minDurationMs: number;
+  maxDurationMs: number;
+  totalDurationMs: number;
+  sharePct: number;
+  isCurrent: boolean;
+  currentElapsedMs: number;
+  maturityPct: number | null;
+}
+
+export interface WyckoffHistoricalCycle {
+  id: string;
+  label: string;
+  stage: WyckoffMacroStage;
+  stageLabel: string;
+  shortLabel: string;
+  startTime: number;
+  endTime: number;
+  durationMs: number;
+  barCount: number;
+  returnPct: number;
+  normalizedCloses: number[];
+  curveMappedValues: (number | null)[];
+  matchesCurrentStage: boolean;
+}
+
+export interface WyckoffOverlayProjection {
+  cycle: WyckoffHistoricalCycle;
+  anchorIndex: number;
+  anchorPrice: number;
+  structureOverlay: (number | null)[];
+  curveOverlay: (number | null)[];
+  maturityVsSelectedPct: number;
+  activeBarsElapsed: number;
+  remainingBarsEstimate: number;
+  currentReturnPct: number;
+  historicalReturnAtSameStepPct: number;
+}
+
+export interface WyckoffPhaseVolumeBin {
+  index: number;
+  priceLow: number;
+  priceHigh: number;
+  priceMid: number;
+  volume: number;
+  buyVolume: number;
+  sellVolume: number;
+  pctOfMax: number;
+  pctOfTotal: number;
+  isPOC: boolean;
+  inValueArea: boolean;
+}
+
+export interface WyckoffPhaseVolumeProfile {
+  stage: WyckoffMacroStage;
+  label: string;
+  shortLabel: string;
+  isCurrent: boolean;
+  episodeCount: number;
+  barCount: number;
+  startTime: number;
+  endTime: number;
+  rangeLow: number;
+  rangeHigh: number;
+  totalVolume: number;
+  poc: number;
+  vah: number;
+  val: number;
+  valueAreaPct: number;
+  bins: WyckoffPhaseVolumeBin[];
+}
+
 export interface WyckoffAnalysis {
   ready: boolean;
+  windowStartTime: number;
+  windowEndTime: number;
+  historySpanMs: number;
   macroStage: WyckoffMacroStage;
   stageLabel: string;
   subPhase: string;
@@ -175,6 +271,32 @@ export interface WyckoffAnalysis {
   trendSlopePct: number;
   priorMovePct: number;
   volumeRatio: number; // recent vol vs 20-bar avg
+  avgVolume: number;
+  climaxThresholdVolume: number;
+  climaxBarCount: number;
+  correlatedClimaxCount: number;
+  macdCurrent: number;
+  macdSignalCurrent: number;
+  macdHistogramCurrent: number;
+  macdBias: "bullish" | "bearish" | "neutral";
+  macdMomentumLabel: string;
+  macdCrossCount: number;
+  adxCurrent: number;
+  plusDiCurrent: number;
+  minusDiCurrent: number;
+  adxPeriodUsed: number;
+  adxRegime: "strong-trend" | "trending" | "emerging" | "range-bound";
+  adxDirection: "bullish" | "bearish" | "neutral";
+  trendStrengthLabel: string;
+  adxDelta: number;
+  currentPhaseElapsedMs: number;
+  currentPhaseAvgMs: number;
+  currentPhaseMaturityPct: number;
+  cycleMaturityLabel: string;
+  currentPhaseStartIndex: number;
+  phaseDurations: WyckoffPhaseDurationStat[];
+  historicalCycles: WyckoffHistoricalCycle[];
+  phaseVolumeProfiles: WyckoffPhaseVolumeProfile[];
   springDetected: boolean;
   utadDetected: boolean;
   effortResultLabel: string;
@@ -208,6 +330,92 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function wilderAdxSeries(
+  bars: OhlcBar[],
+  requestedPeriod = 14
+): { adx: number[]; plusDi: number[]; minusDi: number[]; period: number } {
+  const n = bars.length;
+  if (n < 2) {
+    return {
+      adx: new Array<number>(n).fill(0),
+      plusDi: new Array<number>(n).fill(0),
+      minusDi: new Array<number>(n).fill(0),
+      period: requestedPeriod,
+    };
+  }
+
+  const p =
+    n >= requestedPeriod * 2 + 1
+      ? requestedPeriod
+      : Math.max(3, Math.min(requestedPeriod, Math.floor((n - 1) / 2)));
+
+  const tr = new Array<number>(n).fill(0);
+  const plusDm = new Array<number>(n).fill(0);
+  const minusDm = new Array<number>(n).fill(0);
+
+  for (let i = 1; i < n; i++) {
+    const curr = bars[i];
+    const prev = bars[i - 1];
+    tr[i] = Math.max(
+      Math.max(0, curr.high - curr.low),
+      Math.abs(curr.high - prev.close),
+      Math.abs(curr.low - prev.close)
+    );
+    const upMove = curr.high - prev.high;
+    const downMove = prev.low - curr.low;
+    plusDm[i] = upMove > downMove && upMove > 0 ? upMove : 0;
+    minusDm[i] = downMove > upMove && downMove > 0 ? downMove : 0;
+  }
+
+  const plusDi = new Array<number>(n).fill(0);
+  const minusDi = new Array<number>(n).fill(0);
+  const dx = new Array<number>(n).fill(0);
+  const adx = new Array<number>(n).fill(0);
+
+  let smTr = 0;
+  let smPlusDm = 0;
+  let smMinusDm = 0;
+
+  for (let i = 1; i < n; i++) {
+    if (i <= p) {
+      smTr += tr[i];
+      smPlusDm += plusDm[i];
+      smMinusDm += minusDm[i];
+    } else {
+      smTr = smTr - smTr / p + tr[i];
+      smPlusDm = smPlusDm - smPlusDm / p + plusDm[i];
+      smMinusDm = smMinusDm - smMinusDm / p + minusDm[i];
+    }
+
+    const pdi = smTr > 0 ? clamp((smPlusDm / smTr) * 100, 0, 100) : 0;
+    const mdi = smTr > 0 ? clamp((smMinusDm / smTr) * 100, 0, 100) : 0;
+    plusDi[i] = pdi;
+    minusDi[i] = mdi;
+
+    const diSum = pdi + mdi;
+    dx[i] = diSum > 0.5 ? (Math.abs(pdi - mdi) / diSum) * 100 : 0;
+  }
+
+  plusDi[0] = plusDi[1];
+  minusDi[0] = minusDi[1];
+  dx[0] = dx[1];
+
+  let runningAdx = dx[1];
+  adx[0] = runningAdx;
+  for (let i = 1; i < n; i++) {
+    if (i <= p) {
+      let sum = 0;
+      for (let j = 1; j <= i; j++) sum += dx[j];
+      runningAdx = sum / i;
+    } else {
+      runningAdx = (runningAdx * (p - 1) + dx[i]) / p;
+    }
+    adx[i] = clamp(Number.isFinite(runningAdx) ? runningAdx : 0, 0, 100);
+  }
+
+  return { adx, plusDi, minusDi, period: p };
+}
+
 function phaseNameFor(code: string, stage: WyckoffMacroStage): string {
   if (code === "AR") {
     return stage === "distribution" || stage === "markdown"
@@ -230,6 +438,9 @@ export function analyzeWyckoffCycle(input: WyckoffInput): WyckoffAnalysis {
     const nowTime = bars.at(-1)?.openTime ?? 0;
     return {
       ready: false,
+      windowStartTime: bars[0]?.openTime ?? 0,
+      windowEndTime: nowTime,
+      historySpanMs: 0,
       macroStage: "accumulation",
       stageLabel: "1. Acumulación",
       subPhase: "Sincronizando histórico",
@@ -244,6 +455,32 @@ export function analyzeWyckoffCycle(input: WyckoffInput): WyckoffAnalysis {
       trendSlopePct: 0,
       priorMovePct: 0,
       volumeRatio: 1,
+      avgVolume: 0,
+      climaxThresholdVolume: 0,
+      climaxBarCount: 0,
+      correlatedClimaxCount: 0,
+      macdCurrent: 0,
+      macdSignalCurrent: 0,
+      macdHistogramCurrent: 0,
+      macdBias: "neutral",
+      macdMomentumLabel: "Esperando velas",
+      macdCrossCount: 0,
+      adxCurrent: 0,
+      plusDiCurrent: 0,
+      minusDiCurrent: 0,
+      adxPeriodUsed: 14,
+      adxRegime: "range-bound",
+      adxDirection: "neutral",
+      trendStrengthLabel: "Esperando velas",
+      adxDelta: 0,
+      currentPhaseElapsedMs: 0,
+      currentPhaseAvgMs: 0,
+      currentPhaseMaturityPct: 0,
+      cycleMaturityLabel: "Esperando velas",
+      currentPhaseStartIndex: 0,
+      phaseDurations: [],
+      historicalCycles: [],
+      phaseVolumeProfiles: [],
       springDetected: false,
       utadDetected: false,
       effortResultLabel: "Esperando velas",
@@ -263,7 +500,8 @@ export function analyzeWyckoffCycle(input: WyckoffInput): WyckoffAnalysis {
     };
   }
 
-  const windowBars = bars.slice(-72).map((b, idx, arr) => {
+  // Use extra lookback (up to 110 bars) to warm up MACD(12, 26, 9) before slicing trailing 72 bars
+  const warmupBars = bars.slice(-110).map((b, idx, arr) => {
     if (idx === arr.length - 1 && livePrice > 0) {
       return {
         ...b,
@@ -275,9 +513,29 @@ export function analyzeWyckoffCycle(input: WyckoffInput): WyckoffAnalysis {
     return b;
   });
 
+  const windowCount = Math.min(72, warmupBars.length);
+  const warmupOffset = warmupBars.length - windowCount;
+  const windowBars = warmupBars.slice(warmupOffset);
+
+  const warmupCloses = warmupBars.map((b) => b.close);
+  const ema12Warm = emaSeries(warmupCloses, 12);
+  const ema26Warm = emaSeries(warmupCloses, 26);
+  const macdLineWarm = ema12Warm.map((e12, i) => e12 - ema26Warm[i]);
+  const macdSignalWarm = emaSeries(macdLineWarm, 9);
+  const macdHistWarm = macdLineWarm.map((m, i) => m - macdSignalWarm[i]);
+
   const closes = windowBars.map((b) => b.close);
-  const ema12 = emaSeries(closes, 12);
-  const ema34 = emaSeries(closes, 34);
+  const ema12 = ema12Warm.slice(warmupOffset);
+  const ema34 = emaSeries(warmupCloses, 34).slice(warmupOffset);
+  const macdLine = macdLineWarm.slice(warmupOffset);
+  const macdSignal = macdSignalWarm.slice(warmupOffset);
+  const macdHistogram = macdHistWarm.slice(warmupOffset);
+
+  const adxWarm = wilderAdxSeries(warmupBars, 14);
+  const adxSeries = adxWarm.adx.slice(warmupOffset);
+  const plusDiSeries = adxWarm.plusDi.slice(warmupOffset);
+  const minusDiSeries = adxWarm.minusDi.slice(warmupOffset);
+  const adxPeriodUsed = adxWarm.period;
 
   const lastIdx = windowBars.length - 1;
   const currentClose = closes[lastIdx];
@@ -653,22 +911,527 @@ export function analyzeWyckoffCycle(input: WyckoffInput): WyckoffAnalysis {
 
   const summary = `${stageMeta.label} (${subPhase}): Precio al ${Math.round(clamp(positionInRange * 100, 0, 100))}% del rango estructural (Soporte Ice ${iceSupport.toFixed(currentClose >= 100 ? 2 : 4)} ↔ Techo Creek ${creekResistance.toFixed(currentClose >= 100 ? 2 : 4)}).`;
 
-  const series: WyckoffPricePoint[] = windowBars.map((b, idx) => ({
-    time: b.openTime,
-    close: b.close,
-    high: b.high,
-    low: b.low,
-    volume: b.volume,
-    volumeRatio: overallAvgVol > 0 ? b.volume / overallAvgVol : 1,
-    emaFast: ema12[idx],
-    creek: creekResistance,
-    ice: iceSupport,
-    equilibrium: equilibriumPrice,
-    marker: markerByBarIndex.get(idx),
-  }));
+  const avgSpread =
+    windowBars.reduce((s, b) => s + Math.max(0, b.high - b.low), 0) /
+    Math.max(1, windowBars.length);
+
+  const CLIMAX_PHASE_CODES = new Set(["PS", "SC", "BC", "Spring", "UTAD", "SOS", "SOW", "JAC"]);
+  let climaxBarCount = 0;
+  let correlatedClimaxCount = 0;
+  let macdCrossCount = 0;
+
+  const series: WyckoffPricePoint[] = windowBars.map((b, idx) => {
+    const volRatio = overallAvgVol > 0 ? b.volume / overallAvgVol : 1;
+    const barSpread = Math.max(0, b.high - b.low);
+    const spreadRatio = avgSpread > 0 ? barSpread / avgSpread : 1;
+    const bodyRatio = barSpread > 0 ? Math.abs(b.close - b.open) / barSpread : 1;
+    const spreadPct = b.close > 0 ? (barSpread / b.close) * 100 : 0;
+    const isBull = b.close >= b.open;
+    const marker = markerByBarIndex.get(idx);
+
+    const isChurn = volRatio >= 1.25 && (bodyRatio <= 0.45 || spreadRatio <= 1.05);
+    const isPhaseBoosted = Boolean(marker && CLIMAX_PHASE_CODES.has(marker.code) && volRatio >= 1.2);
+    const isClimax = volRatio >= 1.5 || isChurn || isPhaseBoosted;
+
+    if (isClimax) {
+      climaxBarCount += 1;
+      if (marker) correlatedClimaxCount += 1;
+    }
+
+    const prevHist = idx > 0 ? macdHistogram[idx - 1] : macdHistogram[idx];
+    const currHist = macdHistogram[idx];
+    let macdCross: "bullish" | "bearish" | null = null;
+    if (idx > 0) {
+      if (prevHist <= 0 && currHist > 0) {
+        macdCross = "bullish";
+        macdCrossCount += 1;
+      } else if (prevHist >= 0 && currHist < 0) {
+        macdCross = "bearish";
+        macdCrossCount += 1;
+      }
+    }
+
+    const effortLabel =
+      volRatio >= 1.5 && isChurn
+        ? "Clímax + Churn (Absorción)"
+        : volRatio >= 1.5
+          ? "Pico Climático (≥1.5× Vol)"
+          : isChurn
+            ? "Churn de Volumen (Esfuerzo/Pausa)"
+            : isPhaseBoosted
+              ? `Esfuerzo en Fase ${marker!.code}`
+              : "Volumen Normal";
+
+    return {
+      time: b.openTime,
+      close: b.close,
+      high: b.high,
+      low: b.low,
+      volume: b.volume,
+      volumeRatio: volRatio,
+      isBull,
+      spreadPct,
+      bodyRatio,
+      isChurn,
+      isClimax,
+      effortLabel,
+      emaFast: ema12[idx],
+      macdLine: macdLine[idx],
+      macdSignal: macdSignal[idx],
+      macdHistogram: currHist,
+      macdCross,
+      adx: Number((adxSeries[idx] ?? 0).toFixed(2)),
+      plusDi: Number((plusDiSeries[idx] ?? 0).toFixed(2)),
+      minusDi: Number((minusDiSeries[idx] ?? 0).toFixed(2)),
+      creek: creekResistance,
+      ice: iceSupport,
+      equilibrium: equilibriumPrice,
+      marker,
+    };
+  });
+
+  const macdCurrent = macdLine[lastIdx] ?? 0;
+  const macdSignalCurrent = macdSignal[lastIdx] ?? 0;
+  const macdHistogramCurrent = macdHistogram[lastIdx] ?? 0;
+
+  const adxCurrent = Number((adxSeries[lastIdx] ?? 0).toFixed(1));
+  const plusDiCurrent = Number((plusDiSeries[lastIdx] ?? 0).toFixed(1));
+  const minusDiCurrent = Number((minusDiSeries[lastIdx] ?? 0).toFixed(1));
+  const adxPrev = adxSeries[Math.max(0, lastIdx - 3)] ?? adxCurrent;
+  const adxDelta = Number((adxCurrent - adxPrev).toFixed(1));
+  const adxRegime: "strong-trend" | "trending" | "emerging" | "range-bound" =
+    adxCurrent >= 40
+      ? "strong-trend"
+      : adxCurrent >= 25
+        ? "trending"
+        : adxCurrent >= 20
+          ? "emerging"
+          : "range-bound";
+  const adxDirection: "bullish" | "bearish" | "neutral" =
+    plusDiCurrent > minusDiCurrent + 2
+      ? "bullish"
+      : minusDiCurrent > plusDiCurrent + 2
+        ? "bearish"
+        : "neutral";
+  const trendStrengthLabel =
+    adxRegime === "strong-trend"
+      ? "Tendencia Muy Fuerte (≥40)"
+      : adxRegime === "trending"
+        ? "Tendencia Activa (25–40)"
+        : adxRegime === "emerging"
+          ? "Transición / Ruptura (20–25)"
+          : "Rango Lateral (<20)";
+  const recentCross = [...series].slice(-4).reverse().find((s) => s.macdCross !== null)?.macdCross ?? null;
+  const macdBias: "bullish" | "bearish" | "neutral" =
+    macdHistogramCurrent > 0 && macdCurrent >= macdSignalCurrent
+      ? "bullish"
+      : macdHistogramCurrent < 0 && macdCurrent <= macdSignalCurrent
+        ? "bearish"
+        : "neutral";
+
+  const macdMomentumLabel =
+    recentCross === "bullish"
+      ? macroStage === "accumulation" || macroStage === "markup"
+        ? `Cruce Alcista MACD (Confirma ${eventBadge})`
+        : "Cruce Alcista MACD (Rebote de momentum)"
+      : recentCross === "bearish"
+        ? macroStage === "distribution" || macroStage === "markdown"
+          ? `Cruce Bajista MACD (Confirma ${eventBadge})`
+          : "Cruce Bajista MACD (Pérdida de impulso)"
+        : macdBias === "bullish"
+          ? "Momentum Alcista (MACD > Señal)"
+          : macdBias === "bearish"
+            ? "Momentum Bajista (MACD < Señal)"
+            : "Equilibrio MACD / Compresión";
+
+  // Historical Phase Duration & Cycle Maturity across all supplied OHLCV bars (up to 300)
+  const historyBars = bars.slice(-300).map((b, idx, arr) => {
+    if (idx === arr.length - 1 && livePrice > 0) {
+      return {
+        ...b,
+        close: livePrice,
+        high: Math.max(b.high, livePrice),
+        low: Math.min(b.low, livePrice),
+      };
+    }
+    return b;
+  });
+
+  const deltas: number[] = [];
+  for (let i = 1; i < historyBars.length; i++) {
+    const d = historyBars[i].openTime - historyBars[i - 1].openTime;
+    if (d > 0) deltas.push(d);
+  }
+  deltas.sort((a, b) => a - b);
+  const barIntervalMs = deltas.length > 0 ? deltas[Math.floor(deltas.length / 2)] : 300_000;
+
+  const histCloses = historyBars.map((b) => b.close);
+  const histEma12 = emaSeries(histCloses, 12);
+  const histEma34 = emaSeries(histCloses, 34);
+
+  const rawStages: WyckoffMacroStage[] = historyBars.map((b, i) => {
+    const lookStart = Math.max(0, i - 19);
+    let rHigh = -Infinity;
+    let rLow = Infinity;
+    for (let j = lookStart; j <= i; j++) {
+      if (historyBars[j].high > rHigh) rHigh = historyBars[j].high;
+      if (historyBars[j].low < rLow) rLow = historyBars[j].low;
+    }
+    const rSpan = Math.max(1e-9, rHigh - rLow);
+    const pos = (b.close - rLow) / rSpan;
+    const slopeRefIdx = Math.max(0, i - 5);
+    const prevEma = histEma12[slopeRefIdx] || histEma12[i];
+    const slope = prevEma > 0 ? ((histEma12[i] - prevEma) / prevEma) * 100 : 0;
+
+    if (histEma12[i] > histEma34[i] * 1.0015 && slope > 0.14 && pos >= 0.6) {
+      return "markup";
+    }
+    if (histEma12[i] < histEma34[i] * 0.9985 && slope < -0.14 && pos <= 0.4) {
+      return "markdown";
+    }
+
+    const priorRefIdx = Math.max(0, i - 14);
+    const priorClose = historyBars[priorRefIdx].close;
+    const priorChg = priorClose > 0 ? ((b.close - priorClose) / priorClose) * 100 : 0;
+    const accVotes = (priorChg < -0.15 ? 1 : 0) + (pos <= 0.55 ? 1 : 0) + (slope >= -0.05 ? 1 : 0);
+    const distVotes = (priorChg > 0.15 ? 1 : 0) + (pos >= 0.45 ? 1 : 0) + (slope <= 0.05 ? 1 : 0);
+    return accVotes >= distVotes ? "accumulation" : "distribution";
+  });
+
+  // Smooth isolated 1-bar blips and align active trailing stage with `macroStage`
+  const smoothedStages = [...rawStages];
+  for (let i = 1; i < smoothedStages.length - 1; i++) {
+    if (smoothedStages[i - 1] === smoothedStages[i + 1] && smoothedStages[i] !== smoothedStages[i - 1]) {
+      smoothedStages[i] = smoothedStages[i - 1];
+    }
+  }
+  const activeTailTarget = macroStage;
+  smoothedStages[smoothedStages.length - 1] = activeTailTarget;
+  // Walk backward slightly if only the very last bar flipped, keeping contiguous live phase consistent
+  for (let i = smoothedStages.length - 2; i >= Math.max(0, smoothedStages.length - 2); i--) {
+    if (smoothedStages[i] === rawStages[smoothedStages.length - 1]) {
+      smoothedStages[i] = activeTailTarget;
+    } else {
+      break;
+    }
+  }
+
+  interface PhaseEpisode {
+    stage: WyckoffMacroStage;
+    startIdx: number;
+    endIdx: number;
+    durationMs: number;
+    bars: number;
+  }
+
+  const episodes: PhaseEpisode[] = [];
+  let epStart = 0;
+  for (let i = 1; i <= smoothedStages.length; i++) {
+    if (i === smoothedStages.length || smoothedStages[i] !== smoothedStages[epStart]) {
+      const endIdx = i - 1;
+      const durationMs = Math.max(
+        barIntervalMs,
+        historyBars[endIdx].openTime - historyBars[epStart].openTime + barIntervalMs
+      );
+      episodes.push({
+        stage: smoothedStages[epStart],
+        startIdx: epStart,
+        endIdx,
+        durationMs,
+        bars: endIdx - epStart + 1,
+      });
+      epStart = i;
+    }
+  }
+
+  const currentEpisode = episodes[episodes.length - 1];
+  const currentPhaseElapsedMs = currentEpisode ? currentEpisode.durationMs : barIntervalMs;
+  const historySpanMs = Math.max(
+    barIntervalMs,
+    (historyBars[historyBars.length - 1]?.openTime ?? 0) - (historyBars[0]?.openTime ?? 0) + barIntervalMs
+  );
+
+  const phaseDurations: WyckoffPhaseDurationStat[] = WYCKOFF_STAGES.map((st) => {
+    const matching = episodes.filter((e) => e.stage === st.id);
+    const occurrences = matching.length;
+    const totalDurationMs = matching.reduce((s, e) => s + e.durationMs, 0);
+    const avgDurationMs = occurrences > 0 ? totalDurationMs / occurrences : 0;
+    const avgBars = occurrences > 0 ? matching.reduce((s, e) => s + e.bars, 0) / occurrences : 0;
+    const minDurationMs = occurrences > 0 ? Math.min(...matching.map((e) => e.durationMs)) : 0;
+    const maxDurationMs = occurrences > 0 ? Math.max(...matching.map((e) => e.durationMs)) : 0;
+    const isCurrent = st.id === macroStage;
+    const maturityPct =
+      isCurrent && avgDurationMs > 0
+        ? Math.round((currentPhaseElapsedMs / avgDurationMs) * 100)
+        : null;
+
+    return {
+      stage: st.id,
+      label: st.label,
+      shortLabel: st.shortLabel,
+      occurrences,
+      avgDurationMs,
+      avgDurationHours: avgDurationMs / 3_600_000,
+      avgDurationDays: avgDurationMs / 86_400_000,
+      avgBars,
+      minDurationMs,
+      maxDurationMs,
+      totalDurationMs,
+      sharePct: historySpanMs > 0 ? Math.round((totalDurationMs / historySpanMs) * 100) : 0,
+      isCurrent,
+      currentElapsedMs: isCurrent ? currentPhaseElapsedMs : 0,
+      maturityPct,
+    };
+  });
+
+  const activeStat = phaseDurations.find((p) => p.stage === macroStage);
+  const currentPhaseAvgMs = activeStat?.avgDurationMs ?? currentPhaseElapsedMs;
+  const currentPhaseMaturityPct =
+    currentPhaseAvgMs > 0 ? Math.round((currentPhaseElapsedMs / currentPhaseAvgMs) * 100) : 100;
+
+  const cycleMaturityLabel =
+    currentPhaseMaturityPct >= 110
+      ? `Madura (${currentPhaseMaturityPct}% · Probable transición)`
+      : currentPhaseMaturityPct >= 75
+        ? `Avanzada (${currentPhaseMaturityPct}% de media)`
+        : currentPhaseMaturityPct >= 35
+          ? `En desarrollo (${currentPhaseMaturityPct}% de media)`
+          : `Temprana (${currentPhaseMaturityPct}% de media)`;
+
+  const currentPhaseStartIndex = clamp(
+    windowBars.length - (currentEpisode?.bars ?? 1),
+    0,
+    Math.max(0, windowBars.length - 2)
+  );
+
+  const STAGE_STEP_RANGE: Record<WyckoffMacroStage, [number, number]> = {
+    accumulation: [0, 5],
+    markup: [6, 11],
+    distribution: [12, 17],
+    markdown: [18, 23],
+  };
+
+  const buildHistoricalCycle = (
+    ep: PhaseEpisode,
+    indexSuffix: number,
+    customLabelPrefix?: string
+  ): WyckoffHistoricalCycle => {
+    const epBars = historyBars.slice(ep.startIdx, ep.endIdx + 1);
+    const firstBar = epBars[0];
+    const lastBar = epBars[epBars.length - 1];
+    const baseClose = firstBar?.close > 0 ? firstBar.close : 1;
+    const endClose = lastBar?.close ?? baseClose;
+    const returnPct = ((endClose - baseClose) / baseClose) * 100;
+    const normalizedCloses = epBars.map((b) => (baseClose > 0 ? b.close / baseClose : 1));
+
+    const stageInfo = WYCKOFF_STAGES.find((s) => s.id === ep.stage)!;
+    const [stepStart, stepEnd] = STAGE_STEP_RANGE[ep.stage];
+    const stageIdealSlice = WYCKOFF_CANONICAL_CURVE.slice(stepStart, stepEnd + 1);
+    const idealMin = Math.min(...stageIdealSlice.map((p) => p.idealPrice));
+    const idealMax = Math.max(...stageIdealSlice.map((p) => p.idealPrice));
+    const idealSpan = Math.max(8, idealMax - idealMin);
+
+    const epMin = Math.min(...epBars.map((b) => b.close));
+    const epMax = Math.max(...epBars.map((b) => b.close));
+    const epSpan = Math.max(1e-9, epMax - epMin);
+
+    const curveMappedValues: (number | null)[] = new Array(WYCKOFF_CANONICAL_CURVE.length).fill(null);
+    const stageLen = stepEnd - stepStart + 1;
+    for (let s = 0; s < stageLen; s++) {
+      const samplePos = stageLen > 1 ? (s / (stageLen - 1)) * (epBars.length - 1) : 0;
+      const sampleIdx = clamp(Math.round(samplePos), 0, epBars.length - 1);
+      const norm = (epBars[sampleIdx].close - epMin) / epSpan;
+      curveMappedValues[stepStart + s] = Number((idealMin + norm * idealSpan).toFixed(2));
+    }
+
+    return {
+      id: `${ep.stage}-${firstBar.openTime}-${indexSuffix}`,
+      label: customLabelPrefix ? `${customLabelPrefix} · ${stageInfo.shortLabel}` : stageInfo.shortLabel,
+      stage: ep.stage,
+      stageLabel: stageInfo.label,
+      shortLabel: stageInfo.shortLabel,
+      startTime: firstBar.openTime,
+      endTime: lastBar.openTime,
+      durationMs: ep.durationMs,
+      barCount: ep.bars,
+      returnPct,
+      normalizedCloses,
+      curveMappedValues,
+      matchesCurrentStage: ep.stage === macroStage,
+    };
+  };
+
+  let candidateEpisodes = episodes
+    .slice(0, -1)
+    .filter((ep) => ep.bars >= 3)
+    .reverse()
+    .slice(0, 12);
+
+  // If the entire historical buffer stayed in a single long episode, offer an earlier historical segment for comparison
+  if (candidateEpisodes.length === 0 && historyBars.length >= 14) {
+    const splitEnd = Math.max(4, Math.floor(historyBars.length * 0.5) - 1);
+    const refDuration = Math.max(
+      barIntervalMs,
+      historyBars[splitEnd].openTime - historyBars[0].openTime + barIntervalMs
+    );
+    candidateEpisodes = [
+      {
+        stage: smoothedStages[0] ?? macroStage,
+        startIdx: 0,
+        endIdx: splitEnd,
+        durationMs: refDuration,
+        bars: splitEnd + 1,
+      },
+    ];
+  }
+
+  // Sort so same-stage cycles appear first (most recent first), followed by other historical phases
+  const historicalCycles: WyckoffHistoricalCycle[] = candidateEpisodes
+    .map((ep, idx) =>
+      buildHistoricalCycle(
+        ep,
+        idx,
+        episodes.length <= 1 ? "Ciclo previo" : undefined
+      )
+    )
+    .sort((a, b) => {
+      if (a.matchesCurrentStage !== b.matchesCurrentStage) {
+        return a.matchesCurrentStage ? -1 : 1;
+      }
+      return b.startTime - a.startTime;
+    });
+
+  const phaseVolumeProfiles: WyckoffPhaseVolumeProfile[] = WYCKOFF_STAGES.flatMap((st) => {
+    const matching = episodes.filter((e) => e.stage === st.id);
+    if (!matching.length) return [];
+
+    // Use the most recent identified episode for this Wyckoff phase so POC & Value Area match its price range
+    const ep = matching[matching.length - 1];
+    const epBars = historyBars.slice(ep.startIdx, ep.endIdx + 1);
+    if (!epBars.length) return [];
+
+    let rangeLow = Math.min(...epBars.map((b) => b.low));
+    let rangeHigh = Math.max(...epBars.map((b) => b.high));
+    if (!Number.isFinite(rangeLow) || !Number.isFinite(rangeHigh)) return [];
+    if (rangeHigh <= rangeLow) {
+      const pad = Math.max(1e-6, Math.abs(rangeLow) * 0.001);
+      rangeLow -= pad;
+      rangeHigh += pad;
+    }
+
+    const numBins = 20;
+    const step = (rangeHigh - rangeLow) / numBins;
+    const rawBins = Array.from({ length: numBins }, (_, i) => ({
+      index: i,
+      priceLow: rangeLow + i * step,
+      priceHigh: rangeLow + (i + 1) * step,
+      priceMid: rangeLow + (i + 0.5) * step,
+      volume: 0,
+      buyVolume: 0,
+      sellVolume: 0,
+    }));
+
+    for (const b of epBars) {
+      const barVol = Math.max(0, b.volume);
+      if (barVol <= 0) continue;
+      const buyShare =
+        b.high > b.low
+          ? clamp((b.close - b.low) / (b.high - b.low), 0.15, 0.85)
+          : b.close >= b.open
+            ? 0.65
+            : 0.35;
+      const startBin = clamp(Math.floor((b.low - rangeLow) / step), 0, numBins - 1);
+      const endBin = clamp(Math.floor((b.high - rangeLow - 1e-12) / step), startBin, numBins - 1);
+      const typicalPrice = (b.high + b.low + b.close) / 3;
+      const typicalBin = clamp(Math.floor((typicalPrice - rangeLow) / step), startBin, endBin);
+
+      let weightSum = 0;
+      for (let bi = startBin; bi <= endBin; bi++) {
+        weightSum += bi === typicalBin ? 1.35 : 1;
+      }
+      for (let bi = startBin; bi <= endBin; bi++) {
+        const w = (bi === typicalBin ? 1.35 : 1) / Math.max(1e-9, weightSum);
+        const addVol = barVol * w;
+        rawBins[bi].volume += addVol;
+        rawBins[bi].buyVolume += addVol * buyShare;
+        rawBins[bi].sellVolume += addVol * (1 - buyShare);
+      }
+    }
+
+    const totalVolume = rawBins.reduce((s, b) => s + b.volume, 0);
+    let pocIdx = Math.floor(numBins / 2);
+    let maxBinVol = -1;
+    for (let i = 0; i < numBins; i++) {
+      if (rawBins[i].volume > maxBinVol) {
+        maxBinVol = rawBins[i].volume;
+        pocIdx = i;
+      }
+    }
+    const poc = rawBins[pocIdx].priceMid;
+
+    // 70% Value Area expansion outward from Point of Control
+    let lo = pocIdx;
+    let hi = pocIdx;
+    let accVol = rawBins[pocIdx].volume;
+    const vaTarget = totalVolume * 0.7;
+    while (accVol < vaTarget && (lo > 0 || hi < numBins - 1)) {
+      const lowCand = lo > 0 ? rawBins[lo - 1].volume : -1;
+      const highCand = hi < numBins - 1 ? rawBins[hi + 1].volume : -1;
+      if (highCand >= lowCand && hi < numBins - 1) {
+        hi += 1;
+        accVol += rawBins[hi].volume;
+      } else if (lo > 0) {
+        lo -= 1;
+        accVol += rawBins[lo].volume;
+      } else {
+        break;
+      }
+    }
+
+    const val = rawBins[lo].priceLow;
+    const vah = rawBins[hi].priceHigh;
+    const valueAreaPct = totalVolume > 0 ? Math.round((accVol / totalVolume) * 100) : 70;
+
+    // Descending price order (top-down for vertical side-bar)
+    const bins: WyckoffPhaseVolumeBin[] = [];
+    for (let i = numBins - 1; i >= 0; i--) {
+      const rb = rawBins[i];
+      bins.push({
+        ...rb,
+        pctOfMax: maxBinVol > 0 ? (rb.volume / maxBinVol) * 100 : 0,
+        pctOfTotal: totalVolume > 0 ? (rb.volume / totalVolume) * 100 : 0,
+        isPOC: i === pocIdx,
+        inValueArea: i >= lo && i <= hi,
+      });
+    }
+
+    return [
+      {
+        stage: st.id,
+        label: st.label,
+        shortLabel: st.shortLabel,
+        isCurrent: st.id === macroStage,
+        episodeCount: matching.length,
+        barCount: epBars.length,
+        startTime: epBars[0].openTime,
+        endTime: epBars[epBars.length - 1].openTime,
+        rangeLow,
+        rangeHigh,
+        totalVolume,
+        poc,
+        vah,
+        val,
+        valueAreaPct,
+        bins,
+      },
+    ];
+  });
 
   return {
     ready: true,
+    windowStartTime: windowBars[0]?.openTime ?? 0,
+    windowEndTime: windowBars[lastIdx]?.openTime ?? 0,
+    historySpanMs,
     macroStage,
     stageLabel: stageMeta.label,
     subPhase,
@@ -683,6 +1446,32 @@ export function analyzeWyckoffCycle(input: WyckoffInput): WyckoffAnalysis {
     trendSlopePct,
     priorMovePct,
     volumeRatio,
+    avgVolume: overallAvgVol,
+    climaxThresholdVolume: overallAvgVol * 1.5,
+    climaxBarCount,
+    correlatedClimaxCount,
+    macdCurrent,
+    macdSignalCurrent,
+    macdHistogramCurrent,
+    macdBias,
+    macdMomentumLabel,
+    macdCrossCount,
+    adxCurrent,
+    plusDiCurrent,
+    minusDiCurrent,
+    adxPeriodUsed,
+    adxRegime,
+    adxDirection,
+    trendStrengthLabel,
+    adxDelta,
+    currentPhaseElapsedMs,
+    currentPhaseAvgMs,
+    currentPhaseMaturityPct,
+    cycleMaturityLabel,
+    currentPhaseStartIndex,
+    phaseDurations,
+    historicalCycles,
+    phaseVolumeProfiles,
     springDetected,
     utadDetected,
     effortResultLabel,
@@ -691,5 +1480,51 @@ export function analyzeWyckoffCycle(input: WyckoffInput): WyckoffAnalysis {
     markers,
     curvePoints,
     series,
+  };
+}
+
+export function projectHistoricalCycleOverlay(
+  analysis: WyckoffAnalysis,
+  selectedCycle: WyckoffHistoricalCycle | null
+): WyckoffOverlayProjection | null {
+  if (!analysis.ready || !selectedCycle || analysis.series.length < 2) {
+    return null;
+  }
+
+  const anchorIndex = clamp(analysis.currentPhaseStartIndex, 0, analysis.series.length - 1);
+  const anchorPrice = analysis.series[anchorIndex]?.close || analysis.series[0].close || 1;
+  const structureOverlay: (number | null)[] = new Array(analysis.series.length).fill(null);
+
+  for (let k = 0; k < selectedCycle.normalizedCloses.length; k++) {
+    const targetIdx = anchorIndex + k;
+    if (targetIdx >= analysis.series.length) break;
+    structureOverlay[targetIdx] = anchorPrice * selectedCycle.normalizedCloses[k];
+  }
+
+  const activeBarsElapsed = Math.max(1, analysis.series.length - anchorIndex);
+  const maturityVsSelectedPct =
+    selectedCycle.durationMs > 0
+      ? Math.round((analysis.currentPhaseElapsedMs / selectedCycle.durationMs) * 100)
+      : 100;
+  const remainingBarsEstimate = selectedCycle.barCount - activeBarsElapsed;
+
+  const lastClose = analysis.series[analysis.series.length - 1]?.close ?? anchorPrice;
+  const currentReturnPct = anchorPrice > 0 ? ((lastClose - anchorPrice) / anchorPrice) * 100 : 0;
+
+  const sameStepIdx = clamp(activeBarsElapsed - 1, 0, selectedCycle.normalizedCloses.length - 1);
+  const histRatioAtStep = selectedCycle.normalizedCloses[sameStepIdx] ?? 1;
+  const historicalReturnAtSameStepPct = (histRatioAtStep - 1) * 100;
+
+  return {
+    cycle: selectedCycle,
+    anchorIndex,
+    anchorPrice,
+    structureOverlay,
+    curveOverlay: selectedCycle.curveMappedValues,
+    maturityVsSelectedPct,
+    activeBarsElapsed,
+    remainingBarsEstimate,
+    currentReturnPct,
+    historicalReturnAtSameStepPct,
   };
 }
