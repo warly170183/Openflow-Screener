@@ -64,6 +64,26 @@ export interface ArchitectureChangeEntry {
   files: string[];
 }
 
+export interface ArchitectureCapabilityItem {
+  version: string;
+  title: string;
+  whatItDoes: string;
+  whereToFind: string;
+}
+
+export interface ArchitectureCapabilitySuite {
+  id: string;
+  name: string;
+  shortName: string;
+  versionRange: string;
+  nodeId: string;
+  route: "/" | "/trading-options" | "/interactive-charts" | "/screener" | "/architecture";
+  routeLabel: string;
+  color: "accent" | "buy" | "vwap" | "poc" | "warn";
+  summary: string;
+  capabilities: ArchitectureCapabilityItem[];
+}
+
 export const LAYER_META: Record<ArchLayer, { title: string; description: string }> = {
   source: {
     title: "1. Fuente de Datos Única (OKX v5)",
@@ -74,8 +94,8 @@ export const LAYER_META: Record<ArchLayer, { title: string; description: string 
     description: "Normalización de contratos OKX, sembrado inicial en frío, conmutación automática a SSE/JSON y Screener interno.",
   },
   engine: {
-    title: "3. Motores Analíticos (Order Flow, HVN y Opciones)",
-    description: "Velas footprint, nodos VAP HVN, ATR(14), Bandas de Bollinger (20, 2σ), Stop Loss por volatilidad y ScreenerCore.",
+    title: "3. Motores Analíticos (Order Flow, Liquidez, Wyckoff y Opciones)",
+    description: "Velas footprint, nodos HVN, muros de liquidez L2, Ciclo de Wyckoff (Clímax, MACD, ADX 14, Volume Profile POC/VA y Overlay Histórico), ATR(14) y Bollinger.",
   },
   state: {
     title: "4. Sesión Compartida, Estado Zustand y Temas",
@@ -83,7 +103,7 @@ export const LAYER_META: Record<ArchLayer, { title: string; description: string 
   },
   ui: {
     title: "5. Presentación Canvas DPR y Vistas Recharts",
-    description: "Footprint Canvas 60 FPS (en Terminal y Gráficos Interactivos), Opciones de Trading, Screener y Arquitectura viva.",
+    description: "Footprint Canvas 60 FPS, Opciones de Trading con liquidez cercana, Velas L2, Suite completa Wyckoff, Screener y Arquitectura viva.",
   },
 };
 
@@ -198,8 +218,8 @@ export const ARCH_NODES: ArchNode[] = [
   },
   {
     id: "orderflow-engine",
-    title: "Motores Order Flow, VAP HVN y ATR/BB",
-    subtitle: "Footprint · HVN · TradingOptions",
+    title: "Motores Order Flow, Liquidez, Wyckoff y ATR/BB",
+    subtitle: "Footprint · Liquidez · Wyckoff · ATR",
     layer: "engine",
     layerLabel: "Análisis Cuantitativo",
     col: 2,
@@ -220,14 +240,15 @@ export const ARCH_NODES: ArchNode[] = [
     ],
     perspectives: ["full", "terminal", "trading", "resilience"],
     summary:
-      "Núcleo analítico del cliente. Reagrega trades al cambiar temporalidad, detecta nodos VAP HVN, extrae muros de liquidez L2, clasifica el Ciclo de Wyckoff en vivo y calcula ATR(14) + Bandas de Bollinger para Entrada, TP1, TP2 y Stop Loss.",
+      "Núcleo analítico del cliente. Reagrega trades al cambiar temporalidad, detecta nodos VAP HVN, extrae muros L2, ejecuta la suite completa Wyckoff (fases, fechas, Clímax/Churn, MACD, ADX 14, duraciones, ciclos históricos y Volume Profile POC/VA por fase) y calcula ATR(14) + Bollinger.",
     responsibilities: [
       "Reagrega instantáneamente el buffer histórico de trades si el usuario cambia entre 1m, 5m, 15m, 30m, 1H y 4H.",
-      "analyzeHighVolumeNodes() detecta clusters HVN, extractLiquidityLevels() identifica muros Bid/Ask y analyzeWyckoffCycle() clasifica Acumulación/Markup/Distribución/Markdown.",
+      "analyzeHighVolumeNodes() detecta clusters HVN y extractLiquidityLevels() identifica muros Bid/Ask L2 respecto a la mediana.",
+      "analyzeWyckoffCycle() computa macro-fase, marcadores con fecha/hora, Clímax/Churn, MACD(12,26,9), Wilder ADX(14) (+DI/-DI), duración media por fase, ciclos históricos comparables y phaseVolumeProfiles (POC, VAL, VAH).",
       "evaluateTradingOptions() combina Wilder ATR(14), Bollinger Bands(20, 2σ), VWAP, OBI y Delta para calibrar SL, Entrada, TP1/TP2 y riesgo 2–3%.",
     ],
-    inputs: ["Eventos normalizados en vivo, libro L2 y velas OKX multi-temporalidad"],
-    outputs: ["FootprintCandles, HVN zones, LiquidityLevel[], WyckoffAnalysis, TradeSetupOptions[]"],
+    inputs: ["Eventos normalizados en vivo, libro L2 y velas OKX multi-temporalidad (hasta 240 velas)"],
+    outputs: ["FootprintCandles, HVN zones, LiquidityLevel[], WyckoffAnalysis (ADX/MACD/VP/Overlay), TradeSetupOptions[]"],
   },
   {
     id: "stores-session",
@@ -322,7 +343,7 @@ export const ARCH_NODES: ArchNode[] = [
   {
     id: "analytics-views",
     title: "Opciones de Trading y Gráficos",
-    subtitle: "Footprint · ATR+BB · Recharts Vivo",
+    subtitle: "Footprint · Liquidez · Wyckoff",
     layer: "ui",
     layerLabel: "Vistas Analíticas",
     col: 3,
@@ -343,15 +364,15 @@ export const ARCH_NODES: ArchNode[] = [
     ],
     perspectives: ["full", "trading"],
     summary:
-      "Dos pestañas especializadas conectadas a la misma sesión viva: Opciones de Trading (operación con liquidez cercana y visor modal) y Gráficos Interactivos (Footprint Canvas + Velas con Liquidez + Ciclo de Wyckoff + Clímax + MACD + Trend Strength ADX + Duración de Fases + Overlay Histórico + Volume Profile POC/VA por Fase + Recharts).",
+      "Dos pestañas especializadas conectadas a la misma sesión viva: Opciones de Trading (operación con liquidez cercana y visor modal) y Gráficos Interactivos (Footprint Canvas + Velas con Liquidez + Ciclo de Wyckoff con fechas, tooltips, Clímax/Churn, MACD, Trend Strength ADX, Duración de Fases, Overlay Histórico y Volume Profile POC/VA por Fase + 6 paneles Recharts).",
     responsibilities: [
       "TradingOptionsView y TradeOperationChart proyectan Entrada, Stop Loss, TP1, TP2 y piscinas de liquidez cercanas en modo Velas+BB o Tick a Tick 1s.",
-      "LiquidityCandlesChart y WyckoffCycleChart grafican velas OHLC con muros L2 y el Ciclo de Wyckoff con marcadores, fechas, Volumen Clímax, MACD(12,26,9), Trend Strength (ADX/+DI/-DI), duración por fase, Overlay Historical Cycles y barra lateral de Volume Profile (POC y Value Area 70%) por fase.",
-      "InteractiveChartsView integra FootprintChart Canvas DPR junto a LiquidityCandlesChart, WyckoffCycleChart y los 6 paneles Recharts dinámicos.",
-      "MarketSubpageHeader comparte selectores de activo y temporalidad con el Terminal sin reconectar sockets.",
+      "LiquidityCandlesChart grafica velas OHLC en vivo con muros de liquidez L2, filtro ≥3.2× y perfil POC/HVN lateral.",
+      "WyckoffCycleChart visualiza curva ideal y estructura real con fechas, tooltips, Clímax/Churn, MACD(12,26,9), Trend Strength (ADX/+DI/-DI), duración por fase, Overlay Historical Cycles y barra lateral de Volume Profile (POC y Value Area 70%).",
+      "InteractiveChartsView integra FootprintChart Canvas DPR junto a LiquidityCandlesChart, WyckoffCycleChart y los paneles Recharts dinámicos, compartiendo activo y temporalidad vía MarketSubpageHeader.",
     ],
-    inputs: ["SessionStore vivo, klines por temporalidad, libro L2 OKX y análisis ATR/Bollinger/Wyckoff"],
-    outputs: ["Proyección de operaciones con liquidez cercana, velas con muros L2, Ciclo Wyckoff y Footprint"],
+    inputs: ["SessionStore vivo, 240 klines por temporalidad, libro L2 OKX y análisis ATR/Bollinger/Wyckoff"],
+    outputs: ["Operaciones con liquidez cercana, velas L2, Suite Wyckoff completa (ADX/MACD/VP/Overlay) y Footprint DPR"],
   },
 ];
 
@@ -473,18 +494,26 @@ export const TRACE_STEPS: TraceStep[] = [
     step: 3,
     nodeId: "orderflow-engine",
     edgeId: "e-adapters-engine",
-    title: "3. Motor Footprint, VAP HVN y ATR/Bollinger",
+    title: "3. Motores Footprint, Liquidez L2, Wyckoff y ATR/BB",
     summary:
-      "MarketDataManager actualiza la vela de la temporalidad activa (reagregando sin desconectar), detecta nodos HVN y alimenta a `evaluateTradingOptions()` para recalcular Stop Loss ATR+BB.",
-    modulePath: "lib/engine/orderFlowEngine.ts → lib/engine/tradingOptions.ts",
-    payloadLabel: "Análisis cuantitativo calculado",
+      "MarketDataManager actualiza la vela activa y dispara `evaluateTradingOptions()`, `extractLiquidityLevels()` y `analyzeWyckoffCycle()` (calculando fases, Clímax/Churn, MACD, Wilder ADX(14), duraciones, episodios históricos y Volume Profile POC/VAL/VAH por fase).",
+    modulePath: "lib/engine/orderFlowEngine.ts → lib/engine/wyckoff.ts · tradingOptions.ts",
+    payloadLabel: "Snapshot cuantitativo calculado",
     payload: `{
   "timeframe": "15m",
   "hvnNodes": 4,
+  "liquidityWalls": 6,
   "atr14": 248.5,
-  "bollingerUpper": 94820,
-  "bollingerLower": 93640,
-  "volatilityStopDistance": 362.4
+  "wyckoff": {
+    "macroStage": "accumulation",
+    "phaseCode": "C · Spring",
+    "adxCurrent": 16.4,
+    "adxRegime": "range",
+    "macdCross": "bullish",
+    "poc": 94180,
+    "valueArea": [93940, 94410],
+    "historicalCycles": 3
+  }
 }`,
   },
   {
@@ -500,7 +529,7 @@ export const TRACE_STEPS: TraceStep[] = [
   "symbol": "BTCUSDT",
   "timeframe": "15m",
   "theme": "sepia",
-  "sharedAcross": ["/", "/trading-options", "/interactive-charts"]
+  "sharedAcross": ["/", "/trading-options", "/interactive-charts", "/screener"]
 }`,
   },
   {
@@ -522,19 +551,16 @@ export const TRACE_STEPS: TraceStep[] = [
     step: 6,
     nodeId: "analytics-views",
     edgeId: "e-store-analytics",
-    title: "6. Opciones de Trading y Gráficos (Footprint + Recharts)",
+    title: "6. Opciones de Trading, Velas L2 y Suite Wyckoff",
     summary:
-      "TradingOptionsView proyecta Entrada, TP1, TP2 y Stop Loss (ATR+Bollinger) con riesgo ajustable 2–3%, mientras InteractiveChartsView combina el Footprint Canvas DPR completo con los gráficos Recharts en vivo.",
-    modulePath: "components/TradingOptionsView.tsx · components/InteractiveChartsView.tsx",
-    payloadLabel: "Setup de operación y Footprint + Recharts",
+      "TradingOptionsView proyecta Entrada, SL, TP1/TP2 y muros de liquidez cercanos; InteractiveChartsView combina Footprint Canvas, Velas con Liquidez y el Ciclo de Wyckoff con Clímax, MACD, Trend Strength ADX, Duraciones, Overlay Histórico y Volume Profile POC/VA por fase.",
+    modulePath: "components/TradingOptionsView.tsx · components/WyckoffCycleChart.tsx",
+    payloadLabel: "Vistas analíticas en tiempo real",
     payload: `{
-  "direction": "long",
-  "entry": 94250,
-  "stopLoss": 93887.6,
-  "tp1": 94793.6,
-  "tp2": 95210.4,
-  "riskPct": 2.5,
-  "footprintIncluded": true
+  "tradingOptions": { "direction": "long", "entry": 94250, "sl": 93887.6, "tp1": 94793.6, "riskPct": 2.5 },
+  "wyckoffPanels": ["climaxVolume", "macd(12,26,9)", "adxTrendStrength(14)", "phaseVolumeProfile(POC/VA)"],
+  "overlayHistoricalCycles": true,
+  "liquidityCandlesIncluded": true
 }`,
   },
 ];
@@ -605,7 +631,178 @@ export const CADENCE_METRICS: CadenceMetric[] = [
   },
 ];
 
+export const ARCH_CAPABILITY_SUITES: ArchitectureCapabilitySuite[] = [
+  {
+    id: "wyckoff-indicadores",
+    name: "Indicadores Wyckoff Sincronizados (Clímax, MACD y ADX)",
+    shortName: "Wyckoff Indicadores",
+    versionRange: "v2.10 – v2.15",
+    nodeId: "analytics-views",
+    route: "/interactive-charts",
+    routeLabel: "Ir a Gráficos Interactivos",
+    color: "accent",
+    summary:
+      "Tres sub-gráficos sincronizados (syncId='wyckoff-structure') debajo del precio para confirmar absorción volumétrica, giros de momentum y fuerza tendencial vs rango.",
+    capabilities: [
+      {
+        version: "v2.15",
+        title: "Trend Strength (ADX 14 +DI/-DI)",
+        whatItDoes: "Cuantifica la fuerza real de la tendencia frente a consolidaciones laterales (<20 Rango, 20–25 Transición, ≥25 Tendencia activa).",
+        whereToFind: "Gráficos Interactivos → Ciclo de Wyckoff → Botón «Trend Strength (ADX)»",
+      },
+      {
+        version: "v2.11",
+        title: "MACD (12, 26, 9) con Cruces Bull/Bear",
+        whatItDoes: "Precalienta EMA(12)/EMA(26) hasta con 110 velas previas y señala cruces de momentum alineados con Spring, SOS, BC o UTAD.",
+        whereToFind: "Gráficos Interactivos → Ciclo de Wyckoff → Botón «MACD (12,26,9)»",
+      },
+      {
+        version: "v2.10",
+        title: "Histograma Volumen, Churn y Clímax",
+        whatItDoes: "Resalta velas con volumen climático (≥1.5× media) y churn/absorción institucional correlacionado con los marcadores Wyckoff.",
+        whereToFind: "Gráficos Interactivos → Ciclo de Wyckoff → Botón «Volumen Clímax»",
+      },
+    ],
+  },
+  {
+    id: "wyckoff-perfil-overlay",
+    name: "Volume Profile por Fase y Overlay Histórico Wyckoff",
+    shortName: "POC/VA & Overlay",
+    versionRange: "v2.13 – v2.14",
+    nodeId: "analytics-views",
+    route: "/interactive-charts",
+    routeLabel: "Ir a Gráficos Interactivos",
+    color: "poc",
+    summary:
+      "Herramientas de contexto estructural para ubicar dónde ocurrió la mayor negociación por fase y comparar la madurez actual frente a ciclos pasados del mismo activo.",
+    capabilities: [
+      {
+        version: "v2.14",
+        title: "Volume Profile Side-Bar (POC y Value Area 70%)",
+        whatItDoes: "Calcula POC, VAL y VAH en 20 niveles por cada fase identificada (Acumulación, Markup, Distribución, Markdown) y los proyecta en el gráfico real.",
+        whereToFind: "Gráficos Interactivos → Ciclo de Wyckoff → Botón «Volume Profile» + pestañas por fase",
+      },
+      {
+        version: "v2.13",
+        title: "Overlay Historical Cycles",
+        whatItDoes: "Permite elegir un ciclo histórico previo y superponerlo tanto en la curva ideal (0–100) como anclado al inicio de la fase actual en el gráfico real.",
+        whereToFind: "Gráficos Interactivos → Ciclo de Wyckoff → Botón «Overlay Historical Cycles»",
+      },
+    ],
+  },
+  {
+    id: "wyckoff-base",
+    name: "Motor Wyckoff Base, Fechas, Tooltips y Duración",
+    shortName: "Wyckoff Base & Fases",
+    versionRange: "v2.8 – v2.12",
+    nodeId: "orderflow-engine",
+    route: "/interactive-charts",
+    routeLabel: "Ir a Gráficos Interactivos",
+    color: "vwap",
+    summary:
+      "Detección en vivo de rango Ice/Creek, marcadores institucionales (PS, SC, AR, Spring, SOS, BC, UTAD, SOW), fechas exactas y estadística de duración histórica.",
+    capabilities: [
+      {
+        version: "v2.12",
+        title: "Duración Media por Fase y Madurez (%)",
+        whatItDoes: "Analiza hasta 240 velas OKX para calcular horas/días medios de cada macro-fase e indicar si la fase activa es temprana o madura.",
+        whereToFind: "Gráficos Interactivos → Ciclo de Wyckoff → Panel «Duración histórica y madurez por fase»",
+      },
+      {
+        version: "v2.9 / v2.11",
+        title: "Tooltips Interactivos, Marcadores y Fechas",
+        whatItDoes: "Muestra precio, volumen relativo y fecha/hora exacta (DD/MM HH:mm) al pasar el cursor sobre marcadores y en el punto AHORA.",
+        whereToFind: "Gráficos Interactivos → Ciclo de Wyckoff → Curva Ideal y Estructura Real",
+      },
+      {
+        version: "v2.8",
+        title: "Clasificador Cuantitativo Wyckoff Dual",
+        whatItDoes: "Evalúa Ice, Creek, Equilibrio 50%, Order Flow (OBI/Delta) y posición en el stepper de las 4 macro-fases.",
+        whereToFind: "Gráficos Interactivos → Bloque «Ciclo de Mercado Wyckoff»",
+      },
+    ],
+  },
+  {
+    id: "liquidez-trading",
+    name: "Liquidez L2, Velas OHLC y Opciones de Trading",
+    shortName: "Liquidez & Trading",
+    versionRange: "v2.4 – v2.7",
+    nodeId: "analytics-views",
+    route: "/trading-options",
+    routeLabel: "Ir a Opciones de Trading",
+    color: "buy",
+    summary:
+      "Proyección operativa con riesgo ajustable (2–3%), ATR(14) + Bandas de Bollinger y extracción automática de muros de liquidez L2.",
+    capabilities: [
+      {
+        version: "v2.7",
+        title: "Velas con Niveles de Liquidez L2",
+        whatItDoes: "Dibuja velas OHLC en vivo con muros Bid/Ask ≥3.2× mediana y superpone muros cercanos en las operaciones.",
+        whereToFind: "Gráficos Interactivos → «Velas + Liquidez» y Opciones de Trading → Toggle «Liquidez cercana»",
+      },
+      {
+        version: "v2.6",
+        title: "Visor Interactivo de Operación (Velas+BB / Tick 1s)",
+        whatItDoes: "Abre modal en vivo al pulsar «Proyectado en gráfico» con bandas de beneficio, riesgo, TP1, TP2, Entrada, SL y VWAP.",
+        whereToFind: "Opciones de Trading → Tarjetas de Opción Principal / Estructural",
+      },
+      {
+        version: "v2.4",
+        title: "Opciones de Trading ATR(14) + Bollinger + Riesgo 2–3%",
+        whatItDoes: "Calibra Stop Loss y objetivos dinámicos según volatilidad actual y calcula tamaño de posición en USD.",
+        whereToFind: "Pestaña «Opciones de Trading» (/trading-options)",
+      },
+    ],
+  },
+  {
+    id: "core-okx-temas",
+    name: "Infraestructura OKX, Footprint HVN, Screener y Tema Sepia",
+    shortName: "Core OKX & Temas",
+    versionRange: "v2.1 – v2.5",
+    nodeId: "stores-session",
+    route: "/",
+    routeLabel: "Ir al Terminal",
+    color: "warn",
+    summary:
+      "Sesión única OKX persistente entre rutas, reagregación multi-temporalidad sin reconectar, Footprint Canvas DPR con HVN y tema Sepia.",
+    capabilities: [
+      {
+        version: "v2.5",
+        title: "Footprint Canvas DPR en Gráficos Interactivos",
+        whatItDoes: "Comparte el mismo FootprintChart 60 FPS (Bid×Ask, Delta, Heatmap, HVN) dentro de Gráficos Interactivos.",
+        whereToFind: "Terminal (/) y Gráficos Interactivos (/interactive-charts)",
+      },
+      {
+        version: "v2.4",
+        title: "Tema Sepia y Sesión Compartida Raíz",
+        whatItDoes: "AppProviders conserva velas, libro L2 y OBI al navegar entre pestañas; paleta Sepia aplicada en CSS y Canvas.",
+        whereToFind: "Barra superior → Selector de Tema («Sepia»)",
+      },
+      {
+        version: "v2.1 – v2.3",
+        title: "VAP HVN, Reagregación TF y Screener Interno OKX",
+        whatItDoes: "Nodos HVN toggleables, cambio instantáneo 1m–4H vía OKX REST + WS/SSE relay y escaneo de ~40 swaps perpetuos OKX.",
+        whereToFind: "Terminal (/) → Menú Indicadores / Screener (/screener)",
+      },
+    ],
+  },
+];
+
 export const ARCH_CHANGELOG: ArchitectureChangeEntry[] = [
+  {
+    id: "chg-architecture-wyckoff-suite-sync",
+    version: "v2.16",
+    title: "Mapa Interactivo de Funcionalidades y Trazas Actualizadas en Arquitectura",
+    category: "Visualización y UX",
+    nodeId: "analytics-views",
+    summary:
+      "Se actualizó la sección Arquitectura (/architecture) con un nuevo gráfico interactivo por bloques funcionales (Suite Wyckoff, Liquidez, Opciones y Core OKX), texto explicativo de «qué hace y dónde está» cada mejora, y trazas/nodos sincronizados hasta Trend Strength ADX y Volume Profile.",
+    details: [
+      "ArchitectureView incorpora el panel interactivo «Mapa de Funcionalidades Añadidas (Qué hace y dónde está)» con gráfico Recharts por bloque y tarjetas explicativas vinculadas al nodo responsable y la ruta real.",
+      "TRACE_STEPS (pasos 3 y 6) y ARCH_NODES reflejan ahora LiquidityLevel[], la suite Wyckoff completa (Clímax/Churn, MACD, ADX 14, duraciones, Overlay Histórico y Volume Profile POC/VA) y LiquidityCandlesChart.",
+    ],
+    files: ["lib/architecture/model.ts", "components/ArchitectureView.tsx"],
+  },
   {
     id: "chg-wyckoff-trend-strength-adx",
     version: "v2.15",

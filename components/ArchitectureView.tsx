@@ -20,6 +20,7 @@ import { Segmented } from "@/components/ui/Primitives";
 import ArchitectureDiagram from "@/components/architecture/ArchitectureDiagram";
 import CadenceChart from "@/components/architecture/CadenceChart";
 import {
+  ARCH_CAPABILITY_SUITES,
   ARCH_CHANGELOG,
   ARCH_EDGES,
   ARCH_NODES,
@@ -31,7 +32,7 @@ import {
   type ArchitectureChangeEntry,
 } from "@/lib/architecture/model";
 import { CRYPTO_ASSETS } from "@/lib/config/instruments";
-import { ArrowUpRight, History, Layers, ShieldCheck, Workflow } from "lucide-react";
+import { ArrowUpRight, Compass, History, Layers, ShieldCheck, Workflow } from "lucide-react";
 
 const PERSPECTIVES: { value: ArchPerspective; label: string; title: string }[] = [
   { value: "full", label: "Vista completa", title: "Topología integral del sistema sobre OKX" },
@@ -78,6 +79,7 @@ export default function ArchitectureView() {
   const [activeTraceIndex, setActiveTraceIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [changeCategory, setChangeCategory] = useState<"all" | ArchitectureChangeEntry["category"]>("all");
+  const [selectedSuiteId, setSelectedSuiteId] = useState<string>(ARCH_CAPABILITY_SUITES[0].id);
 
   const handlePerspectiveChange = (next: ArchPerspective) => {
     setPerspective(next);
@@ -180,7 +182,7 @@ export default function ArchitectureView() {
           <span>·</span>
           <span>{CRYPTO_ASSETS.length} activos OKX</span>
           <span>·</span>
-          <span>VAP HVN · ATR+Bollinger · Tema Sepia</span>
+          <span>Footprint · Liquidez L2 · Suite Wyckoff · Tema Sepia</span>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
@@ -250,6 +252,209 @@ export default function ArchitectureView() {
           onJumpTrace={handleJumpTrace}
           onResetTrace={handleResetTrace}
         />
+
+        {/* Interactive Feature Suites & Visual Guide (Qué hace y dónde está) */}
+        {(() => {
+          const activeSuite =
+            ARCH_CAPABILITY_SUITES.find((s) => s.id === selectedSuiteId) ?? ARCH_CAPABILITY_SUITES[0];
+          const SUITE_COLOR: Record<typeof activeSuite.color, string> = {
+            accent: "var(--accent)",
+            buy: "var(--buy)",
+            vwap: "var(--vwap)",
+            poc: "var(--poc)",
+            warn: "var(--warn)",
+          };
+          const suiteChartData = ARCH_CAPABILITY_SUITES.map((s) => ({
+            id: s.id,
+            name: s.shortName,
+            funcionalidades: s.capabilities.length,
+            versionRange: s.versionRange,
+            color: SUITE_COLOR[s.color],
+            nodeId: s.nodeId,
+          }));
+          return (
+            <section
+              className="rounded-[var(--radius-card)] border border-border bg-bg-panel p-4"
+              aria-label="Mapa interactivo de funcionalidades añadidas"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border-muted pb-3">
+                <div className="flex items-start gap-2.5">
+                  <Compass size={17} className="mt-0.5 shrink-0 text-accent" />
+                  <div>
+                    <h2 className="text-[15px] font-semibold tracking-tight text-text-primary">
+                      Gráfico Interactivo de Funcionalidades Añadidas (Qué hace y dónde está)
+                    </h2>
+                    <p className="mt-0.5 text-[12.5px] text-text-secondary">
+                      Selecciona cualquier bloque en el gráfico o en las pestañas para recordar todas las herramientas añadidas a la app y dónde activarlas.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {ARCH_CAPABILITY_SUITES.map((suite) => {
+                    const isActive = suite.id === activeSuite.id;
+                    return (
+                      <button
+                        key={suite.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedSuiteId(suite.id);
+                          setSelectedNodeId(suite.nodeId);
+                        }}
+                        className={`rounded-[var(--radius-sm)] border px-2.5 py-1 text-[11.5px] font-medium transition-colors cursor-pointer ${
+                          isActive
+                            ? "border-accent bg-accent text-on-accent font-semibold"
+                            : "border-border bg-bg-surface text-text-secondary hover:border-accent hover:text-text-primary"
+                        }`}
+                      >
+                        {suite.shortName}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.45fr)]">
+                {/* Clickable Recharts Bar Chart by Capability Suite */}
+                <div className="flex flex-col justify-between gap-2 rounded-[var(--radius)] border border-border-muted bg-bg-surface p-3">
+                  <div className="flex items-center justify-between text-[11.5px] text-text-muted">
+                    <span className="font-mono uppercase tracking-wider">Bloques funcionales ({ARCH_CAPABILITY_SUITES.length})</span>
+                    <span className="font-mono">Clic en barra para explorar</span>
+                  </div>
+                  <div className="h-[230px] w-full">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
+                      <BarChart
+                        data={suiteChartData}
+                        layout="vertical"
+                        margin={{ top: 6, right: 16, left: 6, bottom: 2 }}
+                        onClick={(state) => {
+                          const label = state?.activeLabel;
+                          const hit = suiteChartData.find((d) => d.name === label);
+                          if (hit) {
+                            setSelectedSuiteId(hit.id);
+                            setSelectedNodeId(hit.nodeId);
+                          }
+                        }}
+                      >
+                        <CartesianGrid stroke="var(--grid)" strokeDasharray="3 3" horizontal={false} />
+                        <XAxis
+                          type="number"
+                          allowDecimals={false}
+                          domain={[0, 4]}
+                          tick={{ fill: "var(--text-muted)", fontSize: 10, fontFamily: "var(--font-mono)" }}
+                          axisLine={{ stroke: "var(--border-muted)" }}
+                          tickLine={false}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          width={126}
+                          tick={{ fill: "var(--text-secondary)", fontSize: 11, fontFamily: "var(--font-mono)" }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            background: "var(--bg-panel-alt)",
+                            border: "1px solid var(--border)",
+                            borderRadius: "8px",
+                            fontFamily: "var(--font-mono)",
+                            fontSize: "11px",
+                          }}
+                          formatter={(value) => [`${value} módulos / mejoras`, "Incluye"]}
+                        />
+                        <Bar
+                          dataKey="funcionalidades"
+                          name="Capacidades"
+                          radius={[0, 4, 4, 0]}
+                          barSize={20}
+                          isAnimationActive={false}
+                        >
+                          {suiteChartData.map((entry) => (
+                            <Cell
+                              key={entry.id}
+                              fill={entry.color}
+                              fillOpacity={entry.id === activeSuite.id ? 0.95 : 0.45}
+                              className="cursor-pointer"
+                            />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="font-mono text-[11px] text-text-muted">
+                    Total documentado: {ARCH_CAPABILITY_SUITES.reduce((s, x) => s + x.capabilities.length, 0)} capacidades clave en {ARCH_CHANGELOG.length} hitos ({ARCH_CHANGELOG[ARCH_CHANGELOG.length - 1]?.version} → {ARCH_CHANGELOG[0]?.version}).
+                  </div>
+                </div>
+
+                {/* Detailed Explanatory Guide for Selected Suite */}
+                <div className="flex flex-col justify-between gap-3 rounded-[var(--radius)] border border-border bg-bg-surface p-4">
+                  <div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-text-muted">
+                        <span style={{ color: SUITE_COLOR[activeSuite.color] }}>{activeSuite.versionRange}</span>
+                        <span>·</span>
+                        <span>{activeSuite.capabilities.length} herramientas</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedNodeId(activeSuite.nodeId);
+                            window.scrollTo({ top: 0, behavior: "smooth" });
+                          }}
+                          className="text-[11.5px] font-medium text-text-secondary hover:text-accent hover:underline cursor-pointer"
+                        >
+                          Resaltar nodo ↑
+                        </button>
+                        <Link
+                          href={activeSuite.route}
+                          className="inline-flex items-center gap-1 rounded-[var(--radius-sm)] border border-border bg-bg-panel px-2.5 py-1 text-[11.5px] font-semibold text-accent hover:border-accent"
+                        >
+                          {activeSuite.routeLabel}
+                          <ArrowUpRight size={12} />
+                        </Link>
+                      </div>
+                    </div>
+
+                    <h3 className="mt-1.5 text-[15.5px] font-bold tracking-tight text-text-primary">
+                      {activeSuite.name}
+                    </h3>
+                    <p className="mt-1 text-[12.5px] leading-relaxed text-text-secondary">
+                      {activeSuite.summary}
+                    </p>
+
+                    <div className="mt-3 flex flex-col gap-2.5">
+                      {activeSuite.capabilities.map((cap) => (
+                        <div
+                          key={`${activeSuite.id}-${cap.title}`}
+                          className="rounded-[var(--radius-sm)] border border-border-muted bg-bg-panel px-3 py-2.5"
+                        >
+                          <div className="flex flex-wrap items-baseline justify-between gap-2">
+                            <span className="text-[13px] font-semibold text-text-primary">
+                              {cap.title}
+                            </span>
+                            <span
+                              className="font-mono text-[10.5px] font-bold"
+                              style={{ color: SUITE_COLOR[activeSuite.color] }}
+                            >
+                              {cap.version}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[12px] leading-relaxed text-text-secondary">
+                            {cap.whatItDoes}
+                          </p>
+                          <div className="mt-1.5 font-mono text-[11px] text-text-muted">
+                            Dónde activar: <span className="text-text-primary">{cap.whereToFind}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          );
+        })()}
 
         {/* Interactive System Evolution & Layer Distribution Chart */}
         <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,1fr)]">
@@ -379,7 +584,7 @@ export default function ArchitectureView() {
 
             <div className="rounded-[var(--radius)] border border-border-muted bg-bg-surface p-3 text-[12px] text-text-secondary">
               <strong className="text-text-primary">Resumen actual:</strong>{" "}
-              {ARCH_NODES.length} nodos arquitectónicos · {ARCH_EDGES.length} flujos de datos · 5 vistas principales (Terminal, Opciones de Trading, Gráficos Interactivos con Footprint + Recharts, Screener, Arquitectura) · 7 temas visuales (incl. Sepia).
+              {ARCH_NODES.length} nodos arquitectónicos · {ARCH_EDGES.length} flujos de datos · 5 vistas principales (Terminal, Opciones de Trading, Gráficos Interactivos con Footprint + Velas L2 + Suite Wyckoff, Screener, Arquitectura) · 7 temas visuales (incl. Sepia).
             </div>
           </div>
         </section>

@@ -7,6 +7,7 @@ import {
   type OhlcBar,
 } from "@/lib/engine/tradingOptions";
 import {
+  ARCH_CAPABILITY_SUITES,
   ARCH_CHANGELOG,
   ARCH_EDGES,
   ARCH_NODES,
@@ -49,7 +50,7 @@ describe("Sepia theme & architecture integrity", () => {
     expect(isLightTheme("sepia")).toBe(true);
   });
 
-  it("keeps architecture nodes, edges, trace steps, cadence metrics, and changelog links valid", () => {
+  it("keeps architecture nodes, edges, trace steps, cadence metrics, capability suites, and changelog links valid", () => {
     const nodeIds = new Set(ARCH_NODES.map((n) => n.id));
     for (const edge of ARCH_EDGES) {
       expect(nodeIds.has(edge.from)).toBe(true);
@@ -64,6 +65,11 @@ describe("Sepia theme & architecture integrity", () => {
     for (const entry of ARCH_CHANGELOG) {
       expect(nodeIds.has(entry.nodeId)).toBe(true);
       expect(entry.files.length).toBeGreaterThan(0);
+    }
+    expect(ARCH_CAPABILITY_SUITES.length).toBeGreaterThanOrEqual(5);
+    for (const suite of ARCH_CAPABILITY_SUITES) {
+      expect(nodeIds.has(suite.nodeId)).toBe(true);
+      expect(suite.capabilities.length).toBeGreaterThan(0);
     }
   });
 });
