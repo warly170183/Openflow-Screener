@@ -46,6 +46,7 @@ function MarketRuntimeBridge() {
   useAlerts();
 
   useEffect(() => {
+    void useUIStore.persist.rehydrate();
     void useAlertStore.persist.rehydrate();
     void useLayoutStore.persist.rehydrate();
   }, []);

@@ -564,6 +564,183 @@ export function analyzeHighVolumeNodes(
 }
 
 // ----------------------------------------------------------
+// Volume Profile Support / Resistance Horizontal Nodes
+// ----------------------------------------------------------
+export type VolumeNodeSRRole = "support" | "resistance" | "pivot";
+
+export interface VolumeNodeSRZone extends HighVolumeZone {
+  role: VolumeNodeSRRole;
+  bidVolume: number;
+  askVolume: number;
+  delta: number;
+  sharePct: number;
+  pocRatio: number;
+  strength: number; // 0..100 normalized score
+  distancePct: number; // signed % from referencePrice
+}
+
+export interface LowVolumeNode {
+  price: number;
+  totalVolume: number;
+  meanRatio: number;
+}
+
+export interface VolumeProfileSRAnalysis {
+  hvn: HighVolumeNodeAnalysis;
+  zones: VolumeNodeSRZone[];
+  supportZones: VolumeNodeSRZone[];
+  resistanceZones: VolumeNodeSRZone[];
+  pivotZones: VolumeNodeSRZone[];
+  nearestSupport: VolumeNodeSRZone | null;
+  nearestResistance: VolumeNodeSRZone | null;
+  lvnLevels: LowVolumeNode[];
+  zoneByPrice: Map<number, VolumeNodeSRZone>;
+  lvnByPrice: Map<number, LowVolumeNode>;
+}
+
+export function classifyVolumeZoneRole(
+  startPrice: number,
+  endPrice: number,
+  referencePrice: number,
+  tickSize = 0
+): VolumeNodeSRRole {
+  if (!(referencePrice > 0) || !Number.isFinite(referencePrice)) return "pivot";
+  const tol = tickSize > 0 ? tickSize * 0.55 : 0;
+  if (referencePrice >= startPrice - tol && referencePrice <= endPrice + tol) {
+    return "pivot";
+  }
+  return endPrice < referencePrice ? "support" : "resistance";
+}
+
+/**
+ * Classifies Volume-at-Price HVN clusters into horizontal Support, Resistance,
+ * and active Pivot levels relative to `referencePrice`, and identifies thin
+ * Low-Volume Nodes (LVN) between shelves where price tends to traverse rapidly.
+ */
+export function analyzeVolumeProfileSR(
+  profile: { levels: Array<{ price: number; totalVolume: number; bidVolume: number; askVolume: number; delta: number; isPOC: boolean }>; totalVolume: number } | null | undefined,
+  referencePrice: number,
+  thresholdPct = 0.65,
+  tickSize?: number
+): VolumeProfileSRAnalysis {
+  const hvn = analyzeHighVolumeNodes(profile, thresholdPct, tickSize);
+  const zoneByPrice = new Map<number, VolumeNodeSRZone>();
+  const lvnByPrice = new Map<number, LowVolumeNode>();
+
+  if (!profile || profile.levels.length === 0) {
+    return {
+      hvn,
+      zones: [],
+      supportZones: [],
+      resistanceZones: [],
+      pivotZones: [],
+      nearestSupport: null,
+      nearestResistance: null,
+      lvnLevels: [],
+      zoneByPrice,
+      lvnByPrice,
+    };
+  }
+
+  const totalSessionVol =
+    profile.totalVolume > 0
+      ? profile.totalVolume
+      : profile.levels.reduce((s, l) => s + l.totalVolume, 0);
+
+  const zones: VolumeNodeSRZone[] = hvn.zones.map((zone) => {
+    const role = classifyVolumeZoneRole(zone.startPrice, zone.endPrice, referencePrice, tickSize ?? 0);
+    let bidVolume = 0;
+    let askVolume = 0;
+    let delta = 0;
+    const matchedPrices: number[] = [];
+
+    for (const node of hvn.nodes) {
+      if (node.price >= zone.startPrice - 1e-9 && node.price <= zone.endPrice + 1e-9) {
+        bidVolume += node.bidVolume;
+        askVolume += node.askVolume;
+        delta += node.delta;
+        matchedPrices.push(node.price);
+      }
+    }
+
+    const pocRatio = hvn.pocVolume > 0 ? zone.peakVolume / hvn.pocVolume : 0;
+    const sharePct = totalSessionVol > 0 ? (zone.totalVolume / totalSessionVol) * 100 : 0;
+    const zoneVol = bidVolume + askVolume;
+    const directionalSide =
+      zoneVol > 0
+        ? role === "support"
+          ? bidVolume / zoneVol
+          : role === "resistance"
+            ? askVolume / zoneVol
+            : 0.5
+        : 0.5;
+    const strength = Math.max(
+      1,
+      Math.min(100, Math.round(pocRatio * 70 + Math.min(20, sharePct * 1.4) + directionalSide * 10))
+    );
+    const distancePct =
+      referencePrice > 0 && Number.isFinite(referencePrice)
+        ? ((zone.peakPrice - referencePrice) / referencePrice) * 100
+        : 0;
+
+    const srZone: VolumeNodeSRZone = {
+      ...zone,
+      role,
+      bidVolume,
+      askVolume,
+      delta,
+      sharePct,
+      pocRatio,
+      strength,
+      distancePct,
+    };
+    for (const px of matchedPrices) {
+      zoneByPrice.set(px, srZone);
+    }
+    return srZone;
+  });
+
+  const supportZones = zones
+    .filter((z) => z.role === "support")
+    .sort((a, b) => b.peakPrice - a.peakPrice);
+  const resistanceZones = zones
+    .filter((z) => z.role === "resistance")
+    .sort((a, b) => a.peakPrice - b.peakPrice);
+  const pivotZones = zones
+    .filter((z) => z.role === "pivot")
+    .sort((a, b) => b.peakVolume - a.peakVolume);
+
+  const lvnLevels: LowVolumeNode[] = [];
+  if (profile.levels.length >= 3 && hvn.meanVolume > 0) {
+    const lvnCutoff = hvn.meanVolume * 0.45;
+    for (const lvl of profile.levels) {
+      if (lvl.totalVolume > 0 && lvl.totalVolume <= lvnCutoff && !hvn.nodeByPrice.has(lvl.price)) {
+        const lvn: LowVolumeNode = {
+          price: lvl.price,
+          totalVolume: lvl.totalVolume,
+          meanRatio: lvl.totalVolume / hvn.meanVolume,
+        };
+        lvnLevels.push(lvn);
+        lvnByPrice.set(lvl.price, lvn);
+      }
+    }
+  }
+
+  return {
+    hvn,
+    zones,
+    supportZones,
+    resistanceZones,
+    pivotZones,
+    nearestSupport: supportZones[0] ?? null,
+    nearestResistance: resistanceZones[0] ?? null,
+    lvnLevels,
+    zoneByPrice,
+    lvnByPrice,
+  };
+}
+
+// ----------------------------------------------------------
 // Compute OBI
 // ----------------------------------------------------------
 export function computeOBI(bidVolume: number, askVolume: number): number {

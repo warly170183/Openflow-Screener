@@ -214,7 +214,7 @@ export default function ArchitectureView() {
               Flujo Order Flow, Opciones de Trading y Gráficos sobre OKX
             </h1>
             <p className="mt-1.5 text-[13.5px] leading-relaxed text-text-secondary">
-              Mapa técnico actualizado automáticamente con cada módulo que añadimos: desde el WebSocket OKX y el relay multi-temporalidad hasta VAP HVN, tema Sepia, Opciones de Trading con proyección en vivo y liquidez L2 cercana, y Gráficos Interactivos con Footprint, velas con niveles de liquidez y Ciclo de Wyckoff con fechas, tooltips, histograma Clímax/Churn, MACD (12,26,9), Trend Strength (ADX), duración por fase, superposición de ciclos históricos y barra lateral de Volume Profile (POC y Value Area) por fase.
+              Mapa técnico actualizado automáticamente con cada módulo que añadimos: desde el WebSocket OKX, relay multi-temporalidad y Screener con Escáner Grid ADX(14) en tiempo real para la Watchlist hasta VAP HVN y Volume Profile horizontal de Soporte/Resistencia (VP S/R y LVN) en Footprint, tema Sepia, Opciones de Trading con proyección en vivo y liquidez L2 cercana, y Gráficos Interactivos con velas con niveles de liquidez y Ciclo de Wyckoff completo.
             </p>
           </div>
 
@@ -339,7 +339,7 @@ export default function ArchitectureView() {
                         <XAxis
                           type="number"
                           allowDecimals={false}
-                          domain={[0, 4]}
+                          domain={[0, 5]}
                           tick={{ fill: "var(--text-muted)", fontSize: 10, fontFamily: "var(--font-mono)" }}
                           axisLine={{ stroke: "var(--border-muted)" }}
                           tickLine={false}

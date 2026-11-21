@@ -142,17 +142,17 @@ export const ARCH_NODES: ArchNode[] = [
     accent: "poc",
     protocol: "HTTPS JSON",
     cadence: "Bajo demanda / arranque",
-    files: ["lib/adapters/exchanges.ts", "app/api/terminal/klines/route.ts", "server/terminalRelay.ts", "server/okxFeed.ts"],
+    files: ["lib/adapters/exchanges.ts", "app/api/terminal/klines/route.ts", "app/api/screener/adx/route.ts", "server/terminalRelay.ts", "server/okxFeed.ts"],
     perspectives: ["full", "terminal", "trading", "screener", "resilience"],
     summary:
-      "Provee metadatos de contratos OKX, sembrado inicial de trades recientes al conectar en frío y velas OHLCV multi-temporalidad (1m a 4H) para perfiles previos, ATR y Bandas de Bollinger.",
+      "Provee metadatos de contratos OKX, sembrado inicial de trades recientes al conectar en frío y velas OHLCV multi-temporalidad (1m a 4H) para perfiles previos, ATR, Bollinger y el escáner ADX de la watchlist.",
     responsibilities: [
       "Consulta /public/instruments para resolver ctVal y descubrir los 40 pares más líquidos.",
-      "Expone /api/terminal/klines con soporte `bar` multi-temporalidad (1m, 5m, 15m, 30m, 1H, 4H).",
+      "Expone /api/terminal/klines (1m–4H) y /api/screener/adx para hidratar baselines OHLC multi-activo en el escáner ADX(14).",
       "Siembra trades iniciales desde /market/trades para mostrar datos al instante sin esperar el primer tick.",
     ],
-    inputs: ["Parámetros instId, instType=SWAP/SPOT, bar y límite/cursor"],
-    outputs: ["Multiplicador ctVal, trades iniciales, catálogo OKX y velas OHLCV históricas"],
+    inputs: ["Parámetros instId, instType=SWAP/SPOT, bar y lista de watchlist"],
+    outputs: ["Multiplicador ctVal, trades iniciales, catálogo OKX y velas OHLCV multi-símbolo"],
   },
   {
     id: "terminal-adapters",
@@ -187,15 +187,15 @@ export const ARCH_NODES: ArchNode[] = [
   },
   {
     id: "screener-runtime",
-    title: "Servicio Screener Interno",
-    subtitle: "InternalScreenerService + OkxFeed",
+    title: "Servicio Screener Interno + ADX API",
+    subtitle: "InternalScreenerService + OkxFeed + /api/screener/adx",
     layer: "transport",
     layerLabel: "Backend Screener",
     col: 1,
     y: 365,
     accent: "vwap",
     protocol: "Singleton Node.js · SSE + REST",
-    cadence: "Escaneo cada 2 s · Guarda 60 s",
+    cadence: "Escaneo cada 2 s · Klines ADX 30 s",
     files: [
       "server/screenerService.ts",
       "server/runtime.ts",
@@ -204,17 +204,18 @@ export const ARCH_NODES: ArchNode[] = [
       "server/store.ts",
       "app/api/stream/route.ts",
       "app/api/screener/route.ts",
+      "app/api/screener/adx/route.ts",
     ],
     perspectives: ["full", "screener"],
     summary:
-      "Servicio backend propio dentro de Next.js (sin dependencias de GitHub ni servicios externos) que ingiere ~40 perpetuos OKX y emite rankings y señales por SSE (/api/stream) y JSON.",
+      "Servicio backend propio dentro de Next.js (sin dependencias de GitHub ni servicios externos) que ingiere ~40 perpetuos OKX, sirve baselines OHLC multi-activo vía /api/screener/adx y emite rankings por SSE (/api/stream).",
     responsibilities: [
       "Descubre hasta 40 swaps perpetuos OKX ordenados por liquidez con reconexión automática.",
-      "Ejecuta un primer escaneo temprano al arrancar para poblar la UI sin demora.",
+      "Expone /api/screener/adx?bar=5m|15m|1h|4h con lotes paralelos OKX y recálculo ADX(14) sobre precios vivos.",
       "Persiste señales cerradas y estadísticas de forward-test en disco cada minuto.",
     ],
-    inputs: ["Trades, liquidaciones y derivados de ~40 símbolos OKX"],
-    outputs: ["Stream SSE scan, /api/screener, /api/signals, /api/stats y /api/health"],
+    inputs: ["Trades, liquidaciones, derivados y velas OKX de ~40 símbolos"],
+    outputs: ["Stream SSE scan, /api/screener, /api/screener/adx, /api/signals y /api/health"],
   },
   {
     id: "orderflow-engine",
@@ -240,15 +241,15 @@ export const ARCH_NODES: ArchNode[] = [
     ],
     perspectives: ["full", "terminal", "trading", "resilience"],
     summary:
-      "Núcleo analítico del cliente. Reagrega trades al cambiar temporalidad, detecta nodos VAP HVN, extrae muros L2, ejecuta la suite completa Wyckoff (fases, fechas, Clímax/Churn, MACD, ADX 14, duraciones, ciclos históricos y Volume Profile POC/VA por fase) y calcula ATR(14) + Bollinger.",
+      "Núcleo analítico del cliente. Reagrega trades al cambiar temporalidad, detecta nodos VAP HVN y clasifica Volume Profile S/R (Soporte/Resistencia/Pivote y vacíos LVN), extrae muros L2, ejecuta la suite completa Wyckoff (fases, fechas, Clímax/Churn, MACD, ADX 14, duraciones, ciclos históricos y Volume Profile POC/VA por fase) y calcula ATR(14) + Bollinger.",
     responsibilities: [
       "Reagrega instantáneamente el buffer histórico de trades si el usuario cambia entre 1m, 5m, 15m, 30m, 1H y 4H.",
-      "analyzeHighVolumeNodes() detecta clusters HVN y extractLiquidityLevels() identifica muros Bid/Ask L2 respecto a la mediana.",
-      "analyzeWyckoffCycle() computa macro-fase, marcadores con fecha/hora, Clímax/Churn, MACD(12,26,9), Wilder ADX(14) (+DI/-DI), duración media por fase, ciclos históricos comparables y phaseVolumeProfiles (POC, VAL, VAH).",
+      "analyzeHighVolumeNodes() y analyzeVolumeProfileSR() detectan clusters HVN horizontales y los clasifican en Soporte, Resistencia, Pivote y vacíos LVN frente al precio vivo.",
+      "extractLiquidityLevels() identifica muros Bid/Ask L2 respecto a la mediana; analyzeWyckoffCycle() computa macro-fase, Clímax/Churn, MACD(12,26,9), Wilder ADX(14), duraciones, ciclos históricos y phaseVolumeProfiles.",
       "evaluateTradingOptions() combina Wilder ATR(14), Bollinger Bands(20, 2σ), VWAP, OBI y Delta para calibrar SL, Entrada, TP1/TP2 y riesgo 2–3%.",
     ],
     inputs: ["Eventos normalizados en vivo, libro L2 y velas OKX multi-temporalidad (hasta 240 velas)"],
-    outputs: ["FootprintCandles, HVN zones, LiquidityLevel[], WyckoffAnalysis (ADX/MACD/VP/Overlay), TradeSetupOptions[]"],
+    outputs: ["FootprintCandles, VolumeProfileSRAnalysis (S1/R1/LVN), LiquidityLevel[], WyckoffAnalysis, TradeSetupOptions[]"],
   },
   {
     id: "stores-session",
@@ -313,7 +314,7 @@ export const ARCH_NODES: ArchNode[] = [
   {
     id: "ui-surfaces",
     title: "Terminal Canvas y Screener OKX",
-    subtitle: "Footprint + VAP HVN · OBI 30m · Tabla",
+    subtitle: "Footprint + VP S/R · OBI 30m · Tabla",
     layer: "ui",
     layerLabel: "Presentación Terminal",
     col: 3,
@@ -327,18 +328,21 @@ export const ARCH_NODES: ArchNode[] = [
       "components/IndicatorsMenu.tsx",
       "components/RollingOBIChartPanel.tsx",
       "components/ScreenerView.tsx",
+      "components/AdxScannerGrid.tsx",
+      "components/AdxSparkline.tsx",
+      "hooks/useAdxWatchlist.ts",
       "components/ThemeMenu.tsx",
     ],
     perspectives: ["full", "terminal", "screener"],
     summary:
-      "Vista principal de ejecución con Footprint Canvas (bandas y etiquetas VAP HVN activables), gráfico Recharts OBI 30m, libro L2 y Screener interno multi-activo con tema Sepia integrado.",
+      "Vista principal de ejecución con Footprint Canvas (perfil horizontal Volume Profile S/R y VAP HVN activables), gráfico Recharts OBI 30m, libro L2, Escáner Grid ADX en tiempo real con sparklines 5-ticks (/screener) y tema Sepia.",
     responsibilities: [
-      "FootprintChart renderiza clusters Bid/Ask, burbujas, VWAP y zonas HVN resaltadas en Canvas DPR.",
-      "IndicatorsMenu y botón rápido VAP HVN permiten activar/desactivar el perfil de nodos de alto volumen.",
+      "FootprintChart renderiza clusters Bid/Ask, perfil horizontal S/R (S1/R1, bandas Soporte/Resistencia y vacíos LVN), burbujas, VWAP y zonas HVN en Canvas DPR.",
+      "AdxScannerGrid, AdxSparkline y ScreenerView combinan velas OKX con ticks SSE en vivo para calcular fuerza tendencial ADX(14), +DI/-DI y mostrar si la tendencia acelera o decae en los últimos 5 ticks.",
       "ThemeMenu aplica al instante cualquiera de los 7 temas (incluido Sepia) sobre CSS y Canvas.",
     ],
-    inputs: ["Estado compartido Zustand, SSE /api/stream y eventos del usuario"],
-    outputs: ["Gráficos Footprint/Heatmap, panel OBI 30m, Screener y alertas"],
+    inputs: ["Estado compartido Zustand, SSE /api/stream, /api/screener/adx y eventos del usuario"],
+    outputs: ["Gráficos Footprint/Heatmap con VP S/R, Escáner Grid ADX(14) con Sparkline 5-ticks, OBI 30m y alertas"],
   },
   {
     id: "analytics-views",
@@ -494,24 +498,23 @@ export const TRACE_STEPS: TraceStep[] = [
     step: 3,
     nodeId: "orderflow-engine",
     edgeId: "e-adapters-engine",
-    title: "3. Motores Footprint, Liquidez L2, Wyckoff y ATR/BB",
+    title: "3. Motores Footprint, VP S/R, Liquidez L2, Wyckoff y ATR/BB",
     summary:
-      "MarketDataManager actualiza la vela activa y dispara `evaluateTradingOptions()`, `extractLiquidityLevels()` y `analyzeWyckoffCycle()` (calculando fases, Clímax/Churn, MACD, Wilder ADX(14), duraciones, episodios históricos y Volume Profile POC/VAL/VAH por fase).",
+      "MarketDataManager actualiza la vela activa y dispara `analyzeVolumeProfileSR()` (Soporte S1/Resistencia R1/LVN), `evaluateTradingOptions()`, `extractLiquidityLevels()` y `analyzeWyckoffCycle()` (Clímax/Churn, MACD, ADX 14, duraciones, ciclos históricos y Volume Profile por fase).",
     modulePath: "lib/engine/orderFlowEngine.ts → lib/engine/wyckoff.ts · tradingOptions.ts",
     payloadLabel: "Snapshot cuantitativo calculado",
     payload: `{
   "timeframe": "15m",
   "hvnNodes": 4,
+  "vpSupportResistance": { "nearestSupport": 93980, "nearestResistance": 94620, "lvnCount": 3 },
   "liquidityWalls": 6,
   "atr14": 248.5,
   "wyckoff": {
     "macroStage": "accumulation",
     "phaseCode": "C · Spring",
     "adxCurrent": 16.4,
-    "adxRegime": "range",
     "macdCross": "bullish",
     "poc": 94180,
-    "valueArea": [93940, 94410],
     "historicalCycles": 3
   }
 }`,
@@ -536,14 +539,16 @@ export const TRACE_STEPS: TraceStep[] = [
     step: 5,
     nodeId: "ui-surfaces",
     edgeId: "e-store-ui",
-    title: "5. Terminal Canvas DPR (VAP HVN) y Screener",
+    title: "5. Terminal Canvas DPR (VP S/R + VAP HVN) y Screener",
     summary:
-      "FootprintChart dibuja bandas y nodos HVN activables sobre Canvas DPR a 60 FPS junto al panel Recharts OBI 30m y el Screener interno OKX.",
+      "FootprintChart proyecta nodos horizontales de Soporte/Resistencia y vacíos LVN desde el Volume Profile sobre Canvas DPR a 60 FPS junto al panel OBI 30m y el Screener interno OKX.",
     modulePath: "components/FootprintChart.tsx · components/ScreenerView.tsx",
     payloadLabel: "Renderizado Terminal",
     payload: `{
+  "vpSupportResistance": true,
+  "nearestS1": 93980,
+  "nearestR1": 94620,
   "hvnHighlight": true,
-  "hvnThreshold": 0.70,
   "canvasPalette": "sepia-light"
 }`,
   },
@@ -756,20 +761,26 @@ export const ARCH_CAPABILITY_SUITES: ArchitectureCapabilitySuite[] = [
   },
   {
     id: "core-okx-temas",
-    name: "Infraestructura OKX, Footprint HVN, Screener y Tema Sepia",
-    shortName: "Core OKX & Temas",
-    versionRange: "v2.1 – v2.5",
-    nodeId: "stores-session",
+    name: "Footprint Volume Profile S/R, Infraestructura OKX, Screener y Tema Sepia",
+    shortName: "Footprint VP & Core",
+    versionRange: "v2.1 – v2.17",
+    nodeId: "ui-surfaces",
     route: "/",
     routeLabel: "Ir al Terminal",
     color: "warn",
     summary:
-      "Sesión única OKX persistente entre rutas, reagregación multi-temporalidad sin reconectar, Footprint Canvas DPR con HVN y tema Sepia.",
+      "Visualización horizontal de nodos de volumen para Soporte/Resistencia y vacíos LVN sobre el Footprint Canvas DPR, sesión única OKX, Screener interno y tema Sepia.",
     capabilities: [
+      {
+        version: "v2.17",
+        title: "Volume Profile Horizontal de Soporte y Resistencia (VP S/R)",
+        whatItDoes: "Clasifica los nodos horizontales de alto volumen en Soporte (S1/SUP), Resistencia (R1/RES) y Pivote frente al precio vivo, proyectando bandas/líneas y vacíos LVN en el Footprint.",
+        whereToFind: "Terminal (/) y Gráficos Interactivos (/interactive-charts) → Botón «VP S/R» o Menú Indicators",
+      },
       {
         version: "v2.5",
         title: "Footprint Canvas DPR en Gráficos Interactivos",
-        whatItDoes: "Comparte el mismo FootprintChart 60 FPS (Bid×Ask, Delta, Heatmap, HVN) dentro de Gráficos Interactivos.",
+        whatItDoes: "Comparte el mismo FootprintChart 60 FPS (Bid×Ask, Delta, Heatmap, HVN, VP S/R) dentro de Gráficos Interactivos.",
         whereToFind: "Terminal (/) y Gráficos Interactivos (/interactive-charts)",
       },
       {
@@ -782,13 +793,119 @@ export const ARCH_CAPABILITY_SUITES: ArchitectureCapabilitySuite[] = [
         version: "v2.1 – v2.3",
         title: "VAP HVN, Reagregación TF y Screener Interno OKX",
         whatItDoes: "Nodos HVN toggleables, cambio instantáneo 1m–4H vía OKX REST + WS/SSE relay y escaneo de ~40 swaps perpetuos OKX.",
-        whereToFind: "Terminal (/) → Menú Indicadores / Screener (/screener)",
+        whereToFind: "Terminal (/) → Menú Indicators / Screener (/screener)",
+      },
+    ],
+  },
+  {
+    id: "screener-adx-watchlist",
+    name: "Escáner Grid en Tiempo Real ADX(14) y Sparklines 5-Ticks",
+    shortName: "Screener ADX Grid",
+    versionRange: "v2.18 – v2.19",
+    nodeId: "screener-runtime",
+    route: "/screener",
+    routeLabel: "Ir al Screener ADX",
+    color: "buy",
+    summary:
+      "Cuadrícula y tabla en tiempo real que fusionan velas OKX multi-temporalidad (5m–4H) con los precios SSE del Screener para cuantificar la fuerza tendencial ADX(14), dominancia +DI/-DI y sparklines de aceleración/deceleración en los últimos 5 ticks.",
+    capabilities: [
+      {
+        version: "v2.19",
+        title: "Sparkline Codificado por Color (Últimos 5 Ticks ADX)",
+        whatItDoes:
+          "Registra el histórico móvil de los últimos 5 ticks vivos de ADX y dibuja una mini-gráfica verde (acelerando), roja (perdiendo fuerza) o neutra en tarjetas y filas de la tabla.",
+        whereToFind: "Pestaña «Screener» (/screener) → Tarjetas «5-Tick Strength», ordenación «5t Slope» y columna «ADX(14)»",
+      },
+      {
+        version: "v2.18",
+        title: "Real-Time ADX Scanner Grid + Watchlist Persistente",
+        whatItDoes:
+          "Calcula Wilder ADX(14), +DI/-DI, pendiente Δ3v y régimen (Strong Trend ≥40, Trending ≥25, Emerging, Range-Bound <20) en tiempo real para la watchlist o todo el universo OKX.",
+        whereToFind: "Pestaña «Screener» (/screener) → Panel superior «Real-Time ADX Trend Strength Scanner Grid» + estrella Watchlist",
+      },
+      {
+        version: "v2.18",
+        title: "Columna Ordenable ADX(14) y Filtros de Régimen",
+        whatItDoes:
+          "Permite alternar entre Split (ADX + Tabla), ADX Grid o Tabla OrderFlow, filtrar activos en tendencia (≥25) y abrir cualquier símbolo en Terminal o Wyckoff.",
+        whereToFind: "Pestaña «Screener» (/screener) → Controles «Trending ≥25 / Strong ≥40» y columna «ADX(14)»",
       },
     ],
   },
 ];
 
 export const ARCH_CHANGELOG: ArchitectureChangeEntry[] = [
+  {
+    id: "chg-adx-5tick-sparkline-indicator",
+    version: "v2.19",
+    title: "Indicador Sparkline Codificado por Color sobre los Últimos 5 Ticks de ADX",
+    category: "Indicadores",
+    nodeId: "ui-surfaces",
+    summary:
+      "Se añadió un indicador visual mediante sparklines SVG codificados por color tanto en las tarjetas del Escáner Grid como en cada fila de la tabla OrderFlow (/screener) para detectar de inmediato si la fuerza tendencial ADX(14) aumenta o disminuye durante los últimos 5 ticks en vivo.",
+    details: [
+      "wyckoff.ts añade `recentAdx` a AdxSnapshot y exporta `computeAdxTickTrajectory()`, midiendo variación neta y de último paso en ventanas móviles de 5 ticks («increasing», «decreasing», «flat»).",
+      "useAdxWatchlist.ts mantiene un ring-buffer en vivo por temporalidad y símbolo con cada nuevo tick de precio OKX proveniente del stream SSE, sin duplicar precios estáticos.",
+      "components/AdxSparkline.tsx dibuja el mini-gráfico SVG con área degradada, puntos de ticks y codificación semántica (--buy verde si sube ADX, --sell rojo si cae ADX), integrado en AdxScannerGrid (con ordenación «5t Slope» y conteo rising/fading) y en la columna ADX(14) de ScreenerView.",
+    ],
+    files: [
+      "lib/engine/wyckoff.ts",
+      "hooks/useAdxWatchlist.ts",
+      "components/AdxSparkline.tsx",
+      "components/AdxScannerGrid.tsx",
+      "components/ScreenerView.tsx",
+      "__tests__/adxScannerGrid.test.ts",
+      "lib/architecture/model.ts",
+    ],
+  },
+  {
+    id: "chg-realtime-adx-watchlist-scanner-grid",
+    version: "v2.18",
+    title: "Escáner Grid en Tiempo Real de Fuerza Tendencial ADX(14) para Watchlist",
+    category: "Trading y Análisis",
+    nodeId: "screener-runtime",
+    summary:
+      "Se implementó un escáner en cuadrícula (Grid) en tiempo real dentro de Screener (/screener) que muestra la fuerza tendencial ADX(14) de Wilder, dominancia direccional +DI/-DI y clasificación de régimen para todos los activos fijados en la Watchlist o en el universo activo de perpetuos OKX.",
+    details: [
+      "wyckoff.ts exporta wilderAdxSeries(), updateBarsWithLivePrice() y computeAdxSnapshot() para recalcular ADX(14), +DI, -DI, pendiente Δ3v y régimen (strong-trend ≥40, trending ≥25, emerging 20–25, range-bound <20) ante cada tick en vivo.",
+      "app/api/screener/adx/route.ts consulta en paralelo velas reales de OKX (5m, 15m, 1H, 4H) y hooks/useAdxWatchlist.ts fusiona el precio vivo del stream SSE (/api/stream) para actualizar las tarjetas continuamente.",
+      "uiStore añade `watchlistSymbols` persistente (con botón estrella ★ y restablecimiento) y ScreenerView integra AdxScannerGrid + modos Split / ADX Grid / Tabla OrderFlow con columna ordenable ADX(14).",
+    ],
+    files: [
+      "lib/engine/wyckoff.ts",
+      "app/api/screener/adx/route.ts",
+      "hooks/useAdxWatchlist.ts",
+      "lib/store/uiStore.ts",
+      "components/AdxScannerGrid.tsx",
+      "components/ScreenerView.tsx",
+      "__tests__/adxScannerGrid.test.ts",
+      "lib/architecture/model.ts",
+      "components/ArchitectureView.tsx",
+    ],
+  },
+  {
+    id: "chg-footprint-vp-support-resistance",
+    version: "v2.17",
+    title: "Volume Profile Horizontal de Soporte, Resistencia y LVN en Footprint",
+    category: "Indicadores",
+    nodeId: "ui-surfaces",
+    summary:
+      "Se añadió la visualización horizontal de Volume Profile orientada a Soporte y Resistencia en FootprintChart (Terminal y Gráficos Interactivos), clasificando nodos de alto volumen (S1/SUP, R1/RES, PIVOT) y vacíos de bajo volumen (LVN) frente al precio en vivo.",
+    details: [
+      "orderFlowEngine.ts incorpora analyzeVolumeProfileSR() y classifyVolumeZoneRole(), calculando fuerza estructural (0–100), distancia % al precio vivo, delta por nodo, nearestSupport (S1), nearestResistance (R1) y lvnLevels.",
+      "FootprintChart pinta barras horizontales codificadas en el perfil lateral («VP · S/R NODES»), bandas y líneas de trigger horizontales S1/R1/SUP/RES sobre el Footprint, etiquetas en el eje de precio y lectura detallada en tooltips.",
+      "uiStore y IndicatorsMenu añaden el indicador `vpSupportResistance` (activado por defecto) junto al botón rápido `VP S/R` en la barra del Footprint.",
+    ],
+    files: [
+      "lib/engine/orderFlowEngine.ts",
+      "lib/store/uiStore.ts",
+      "components/IndicatorsMenu.tsx",
+      "components/FootprintChart.tsx",
+      "__tests__/vapHvnIndicator.test.ts",
+      "lib/architecture/model.ts",
+      "components/ArchitectureView.tsx",
+    ],
+  },
   {
     id: "chg-architecture-wyckoff-suite-sync",
     version: "v2.16",

@@ -95,6 +95,7 @@ export default function IndicatorsMenu() {
 
         <MenuSection title="Volume-at-Price HVN">
           {toggle("hvnHighlight", "High-volume nodes", "Highlight HVN bands and cells across the footprint")}
+          {toggle("vpSupportResistance", "S/R Volume Nodes", "Project horizontal Support, Resistance & LVN zones from Volume Profile")}
           <Row label="HVN threshold">
             <Segmented
               size="xs"

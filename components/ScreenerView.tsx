@@ -2,19 +2,28 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { Star } from "lucide-react";
 import { Wordmark } from "@/components/Logo";
 import RouteNav from "@/components/RouteNav";
 import ThemeMenu from "@/components/ThemeMenu";
 import CommandPalette from "@/components/CommandPalette";
+import AdxScannerGrid, { type AdxGridScope } from "@/components/AdxScannerGrid";
+import AdxSparkline from "@/components/AdxSparkline";
 import { Icon } from "@/components/ui/Icons";
 import { Segmented } from "@/components/ui/Primitives";
 import { useScreenerFeed } from "@/hooks/useScreenerFeed";
+import { useAdxWatchlist, type AdxScannerTimeframe } from "@/hooks/useAdxWatchlist";
+import { PERP_SYMBOLS } from "@/lib/config/instruments";
+import type { AdxSnapshot, AdxTickTrajectory } from "@/lib/engine/wyckoff";
 import type { ScreenerRow } from "@/lib/screener/screenerCore";
 import type { BucketStats, TrackedSignal, TrackerStats } from "@/lib/signals/tracker";
+import { normalizeWatchlistSymbol, useUIStore } from "@/lib/store/uiStore";
 
 type FilterMode = "all" | "signals" | "long" | "short";
+type ScreenerLayoutMode = "split" | "grid" | "table";
 type SortKey =
   | "score"
+  | "adx"
   | "symbol"
   | "price"
   | "change5m"
@@ -60,6 +69,7 @@ function ScoreBadge({ row }: { row: ScreenerRow }) {
 const COLUMNS: ReadonlyArray<{ key?: SortKey; label: string }> = [
   { key: "symbol", label: "Symbol" },
   { key: "price", label: "Price" },
+  { key: "adx", label: "ADX(14)" },
   { key: "change5m", label: "5m" },
   { key: "change1h", label: "1h" },
   { key: "volume1mUsd", label: "Vol 1m" },
@@ -74,16 +84,58 @@ const COLUMNS: ReadonlyArray<{ key?: SortKey; label: string }> = [
   { key: "score", label: "Score" },
 ];
 
+function AdxCell({
+  snapshot,
+  trajectory,
+}: {
+  snapshot: AdxSnapshot | undefined;
+  trajectory: AdxTickTrajectory | undefined;
+}) {
+  if (!snapshot) return <span className="text-text-muted">—</span>;
+  const color =
+    snapshot.regime === "range-bound"
+      ? "var(--text-muted)"
+      : snapshot.regime === "emerging"
+        ? "var(--warn)"
+        : snapshot.direction === "bullish"
+          ? "var(--buy)"
+          : snapshot.direction === "bearish"
+            ? "var(--sell)"
+            : "var(--accent)";
+  const arrow = snapshot.direction === "bullish" ? "▲" : snapshot.direction === "bearish" ? "▼" : "•";
+  return (
+    <span className="inline-flex items-center justify-end gap-2 font-mono tabular-nums">
+      <AdxSparkline trajectory={trajectory} width={48} height={16} showDelta={false} />
+      <span
+        className="inline-flex items-center justify-end gap-1"
+        style={{ color }}
+        title={`ADX ${snapshot.adx.toFixed(1)} · +DI ${snapshot.plusDi.toFixed(1)} / -DI ${snapshot.minusDi.toFixed(1)} · ${snapshot.regime}`}
+      >
+        <span className="text-[10px]">{arrow}</span>
+        <span className={snapshot.adx >= 25 ? "font-bold" : "font-medium"}>{snapshot.adx.toFixed(1)}</span>
+      </span>
+    </span>
+  );
+}
+
 function Table({
   rows,
   sortKey,
   sortDir,
   onSort,
+  adxBySymbol,
+  trajectoryBySymbol,
+  watchlistSet,
+  onToggleWatchlist,
 }: {
   rows: ScreenerRow[];
   sortKey: SortKey;
   sortDir: "asc" | "desc";
   onSort: (key: SortKey) => void;
+  adxBySymbol: Map<string, AdxSnapshot>;
+  trajectoryBySymbol: Map<string, AdxTickTrajectory>;
+  watchlistSet: Set<string>;
+  onToggleWatchlist: (symbol: string) => void;
 }) {
   return (
     <div className="max-h-[calc(100vh-195px)] overflow-auto">
@@ -113,23 +165,40 @@ function Table({
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
+          {rows.map((r) => {
+            const normSym = normalizeWatchlistSymbol(r.symbol);
+            const inWatchlist = watchlistSet.has(normSym);
+            const adxSnap = adxBySymbol.get(normSym);
+            const adxTraj = trajectoryBySymbol.get(normSym);
+            return (
             <tr key={r.symbol} className={`group border-b border-border-muted transition-colors hover:bg-bg-hover ${r.signal ? "bg-[var(--highlight-dim)]" : ""}`}>
               <td className={`${td} font-semibold text-text-primary`}>
-                <Link
-                  href={terminalHref(r.symbol)}
-                  className="inline-flex items-center gap-1.5 text-text-primary no-underline hover:text-accent"
-                  title={`Open ${base(r.symbol)}USDT in Terminal`}
-                >
-                  <span>{base(r.symbol)}</span>
-                  <span className="opacity-0 transition-opacity group-hover:opacity-70">
-                    <Icon.External />
-                  </span>
-                </Link>
+                <span className="inline-flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onToggleWatchlist(normSym)}
+                    aria-label={inWatchlist ? `Remove ${base(r.symbol)} from watchlist` : `Add ${base(r.symbol)} to watchlist`}
+                    title={inWatchlist ? "In Watchlist (click to remove)" : "Pin to Watchlist"}
+                    className="inline-flex items-center text-text-muted hover:text-warn cursor-pointer"
+                  >
+                    <Star size={12} className={inWatchlist ? "fill-warn text-warn" : ""} />
+                  </button>
+                  <Link
+                    href={terminalHref(r.symbol)}
+                    className="inline-flex items-center gap-1.5 text-text-primary no-underline hover:text-accent"
+                    title={`Open ${base(r.symbol)}USDT in Terminal`}
+                  >
+                    <span>{base(r.symbol)}</span>
+                    <span className="opacity-0 transition-opacity group-hover:opacity-70">
+                      <Icon.External />
+                    </span>
+                  </Link>
+                </span>
                 {!r.warmedUp && <span className="ml-1.5 text-[10px] font-normal text-warn" title="Warming up">warm-up</span>}
                 {r.cascade && <span className="ml-1.5 text-[10px] font-normal text-sell">cascade</span>}
               </td>
               <td className={td}>{price(r.price)}</td>
+              <td className={td}><AdxCell snapshot={adxSnap} trajectory={adxTraj} /></td>
               <td className={`${td} ${tone(r.change5m)}`}>{pct(r.change5m)}</td>
               <td className={`${td} ${tone(r.change1h)}`}>{pct(r.change1h)}</td>
               <td className={td}>${usd(r.volume1mUsd)}</td>
@@ -193,9 +262,10 @@ function Table({
               </td>
               <td className={td}><ScoreBadge row={r} /></td>
             </tr>
-          ))}
+            );
+          })}
           {rows.length === 0 && (
-            <tr><td colSpan={14} className="px-3 py-10 text-center text-text-muted">No matching symbols in current scan…</td></tr>
+            <tr><td colSpan={15} className="px-3 py-10 text-center text-text-muted">No matching symbols in current scan…</td></tr>
           )}
         </tbody>
       </table>
@@ -269,10 +339,11 @@ function StatsTable({ stats }: { stats: TrackerStats }) {
   );
 }
 
-function sortValue(row: ScreenerRow, key: SortKey): number | string {
+function sortValue(row: ScreenerRow, key: SortKey, adxBySymbol: Map<string, AdxSnapshot>): number | string {
   switch (key) {
     case "symbol": return base(row.symbol);
     case "price": return row.price;
+    case "adx": return adxBySymbol.get(normalizeWatchlistSymbol(row.symbol))?.adx ?? -Infinity;
     case "change5m": return row.change5m ?? -Infinity;
     case "change1h": return row.change1h ?? -Infinity;
     case "volume1mUsd": return row.volume1mUsd;
@@ -288,6 +359,13 @@ function sortValue(row: ScreenerRow, key: SortKey): number | string {
 
 export default function ScreenerView() {
   const { scan, signals, stats, health, link } = useScreenerFeed();
+  const watchlistSymbols = useUIStore((s) => s.watchlistSymbols);
+  const toggleWatchlistSymbol = useUIStore((s) => s.toggleWatchlistSymbol);
+  const resetWatchlist = useUIStore((s) => s.resetWatchlist);
+
+  const [layoutMode, setLayoutMode] = useState<ScreenerLayoutMode>("split");
+  const [adxScope, setAdxScope] = useState<AdxGridScope>("watchlist");
+  const [adxTimeframe, setAdxTimeframe] = useState<AdxScannerTimeframe>("15m");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterMode>("all");
   const [hideWarmup, setHideWarmup] = useState(false);
@@ -295,6 +373,24 @@ export default function ScreenerView() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const rows = useMemo(() => scan?.rows ?? [], [scan]);
+
+  const scannerUniverse = useMemo(() => {
+    const activeFromRows = rows.map((r) => normalizeWatchlistSymbol(r.symbol)).filter(Boolean);
+    const seedList = activeFromRows.length > 0 ? activeFromRows : PERP_SYMBOLS.slice(0, 32);
+    return Array.from(new Set([...watchlistSymbols, ...seedList])).slice(0, 45);
+  }, [rows, watchlistSymbols]);
+
+  const adxWatchlist = useAdxWatchlist({
+    symbols: scannerUniverse,
+    watchlistSymbols,
+    timeframe: adxTimeframe,
+    liveRows: rows,
+  });
+
+  const watchlistSet = useMemo(
+    () => new Set(watchlistSymbols.map(normalizeWatchlistSymbol).filter(Boolean)),
+    [watchlistSymbols]
+  );
 
   const visibleRows = useMemo(() => {
     const qNorm = query.trim().toUpperCase();
@@ -308,15 +404,15 @@ export default function ScreenerView() {
     });
 
     return [...filtered].sort((a, b) => {
-      const av = sortValue(a, sortKey);
-      const bv = sortValue(b, sortKey);
+      const av = sortValue(a, sortKey, adxWatchlist.snapshotBySymbol);
+      const bv = sortValue(b, sortKey, adxWatchlist.snapshotBySymbol);
       if (typeof av === "string" && typeof bv === "string") {
         return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
       }
       const diff = (av as number) - (bv as number);
       return sortDir === "asc" ? diff : -diff;
     });
-  }, [rows, query, filter, hideWarmup, sortKey, sortDir]);
+  }, [rows, query, filter, hideWarmup, sortKey, sortDir, adxWatchlist.snapshotBySymbol]);
 
   const onSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -425,7 +521,17 @@ export default function ScreenerView() {
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex h-8 w-56 items-center gap-2 rounded-full border border-border bg-bg-panel px-3 text-text-muted focus-within:border-accent">
+          <Segmented
+            value={layoutMode}
+            onChange={setLayoutMode}
+            ariaLabel="Screener layout mode"
+            options={[
+              { value: "split", label: "Split (ADX + Table)" },
+              { value: "grid", label: "ADX Grid" },
+              { value: "table", label: "OrderFlow Table" },
+            ]}
+          />
+          <label className="flex h-8 w-52 items-center gap-2 rounded-full border border-border bg-bg-panel px-3 text-text-muted focus-within:border-accent">
             <Icon.Search />
             <input
               type="text"
@@ -455,7 +561,7 @@ export default function ScreenerView() {
             Hide warm-up
           </button>
         </div>
-        <span className="text-[11.5px] text-text-muted">Authoritative in-app reference · click any symbol to open in the Terminal</span>
+        <span className="text-[11.5px] text-text-muted">Authoritative in-app reference · star assets to pin into Watchlist</span>
       </div>
 
       {link === "down" && (
@@ -464,22 +570,55 @@ export default function ScreenerView() {
         </div>
       )}
 
-      <div className="grid gap-3 xl:grid-cols-[1fr_380px]">
-        <section className={`${card} overflow-hidden`}>
-          <Table rows={visibleRows} sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-        </section>
-        <div className="flex flex-col gap-3">
-          <section className={`${card} overflow-hidden`}>
-            <h2 className="border-b border-border px-3 py-2 text-[12px] font-semibold">Signals</h2>
-            <div className="max-h-[420px] overflow-y-auto"><SignalList items={signals} /></div>
-          </section>
-          <section className={`${card} overflow-hidden`}>
-            <h2 className="border-b border-border px-3 py-2 text-[12px] font-semibold">Forward test</h2>
-            {stats ? <StatsTable stats={stats} /> : <p className="p-4 text-[12px] text-text-muted">No data yet.</p>}
-          </section>
+      {layoutMode !== "table" && (
+        <div className="mb-3">
+          <AdxScannerGrid
+            entries={adxWatchlist.entries}
+            scope={adxScope}
+            onScopeChange={setAdxScope}
+            timeframe={adxTimeframe}
+            onTimeframeChange={setAdxTimeframe}
+            watchlistCount={watchlistSymbols.length}
+            allCount={scannerUniverse.length}
+            onToggleWatchlist={toggleWatchlistSymbol}
+            onResetWatchlist={resetWatchlist}
+            isLoading={adxWatchlist.isLoading}
+            error={adxWatchlist.error}
+            lastSyncedAt={adxWatchlist.lastSyncedAt}
+            onRefresh={adxWatchlist.refreshNow}
+            searchQuery={query}
+            onSearchQueryChange={setQuery}
+          />
         </div>
-      </div>
-      <p className="mt-3 text-[11px] text-text-muted">Scores are heuristics, not validated predictions or advice. Judge them by the forward test above.</p>
+      )}
+
+      {layoutMode !== "grid" && (
+        <div className="grid gap-3 xl:grid-cols-[1fr_380px]">
+          <section className={`${card} overflow-hidden`}>
+            <Table
+              rows={visibleRows}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={onSort}
+              adxBySymbol={adxWatchlist.snapshotBySymbol}
+              trajectoryBySymbol={adxWatchlist.trajectoryBySymbol}
+              watchlistSet={watchlistSet}
+              onToggleWatchlist={toggleWatchlistSymbol}
+            />
+          </section>
+          <div className="flex flex-col gap-3">
+            <section className={`${card} overflow-hidden`}>
+              <h2 className="border-b border-border px-3 py-2 text-[12px] font-semibold">Signals</h2>
+              <div className="max-h-[420px] overflow-y-auto"><SignalList items={signals} /></div>
+            </section>
+            <section className={`${card} overflow-hidden`}>
+              <h2 className="border-b border-border px-3 py-2 text-[12px] font-semibold">Forward test</h2>
+              {stats ? <StatsTable stats={stats} /> : <p className="p-4 text-[12px] text-text-muted">No data yet.</p>}
+            </section>
+          </div>
+        </div>
+      )}
+      <p className="mt-3 text-[11px] text-text-muted">Scores and ADX readings are quantitative heuristics over live OKX data, not validated predictions or advice.</p>
     </div>
   );
 }

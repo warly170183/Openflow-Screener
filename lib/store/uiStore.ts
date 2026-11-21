@@ -37,6 +37,7 @@ export interface IndicatorSettings {
   hvnHighlight: boolean; // highlight High-Volume Nodes from Volume-at-Price profile
   hvnThreshold: number; // fraction of POC volume (0.5 | 0.65 | 0.75 | 0.85)
   hvnColor: string | null; // null = theme warn/amber colour
+  vpSupportResistance: boolean; // project horizontal VP S/R nodes across the footprint
   imbalances: boolean;
   imbalanceRatio: number; // 2 | 2.5 | 3 | 4
   stackedImbalances: boolean;
@@ -67,6 +68,7 @@ export const DEFAULT_INDICATORS: IndicatorSettings = {
   hvnHighlight: true,
   hvnThreshold: 0.65,
   hvnColor: null,
+  vpSupportResistance: true,
   imbalances: true,
   imbalanceRatio: 3,
   stackedImbalances: true,
@@ -85,6 +87,34 @@ export const DEFAULT_INDICATORS: IndicatorSettings = {
   nakedPocs: true,
 };
 
+export const DEFAULT_WATCHLIST_SYMBOLS: string[] = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "XRPUSDT",
+  "DOGEUSDT",
+  "SUIUSDT",
+  "LINKUSDT",
+  "AVAXUSDT",
+  "BNBUSDT",
+  "ADAUSDT",
+  "TONUSDT",
+  "NEARUSDT",
+];
+
+export function normalizeWatchlistSymbol(symbol: string): string {
+  const upper = symbol.trim().toUpperCase();
+  if (!upper) return "";
+  if (upper.endsWith("-USDT-SWAP")) {
+    return `${upper.slice(0, -"-USDT-SWAP".length)}USDT`;
+  }
+  if (upper.endsWith("-USDT")) {
+    return `${upper.slice(0, -"-USDT".length)}USDT`;
+  }
+  if (upper.endsWith("USDT")) return upper;
+  return `${upper}USDT`;
+}
+
 interface UIStore {
   toolProfile: ToolProfile;
   panels: PanelVisibility;
@@ -92,8 +122,12 @@ interface UIStore {
   heatmap: HeatmapSettings;
   footprintMode: FootprintMode;
   indicators: IndicatorSettings;
+  watchlistSymbols: string[];
   setIndicator: <K extends keyof IndicatorSettings>(key: K, value: IndicatorSettings[K]) => void;
   resetIndicators: () => void;
+  toggleWatchlistSymbol: (symbol: string) => void;
+  setWatchlistSymbols: (symbols: string[]) => void;
+  resetWatchlist: () => void;
   setToolProfile: (profile: ToolProfile) => void;
   setPanelVisible: (panel: keyof PanelVisibility, visible: boolean) => void;
   setTheme: (theme: ThemePreference) => void;
@@ -110,8 +144,27 @@ export const useUIStore = create<UIStore>()(
       heatmap: { tradedVolume: false, restingLiquidity: false },
       footprintMode: "bidask",
       indicators: DEFAULT_INDICATORS,
+      watchlistSymbols: DEFAULT_WATCHLIST_SYMBOLS,
       setIndicator: (key, value) => set((state) => ({ indicators: { ...state.indicators, [key]: value } })),
       resetIndicators: () => set({ indicators: DEFAULT_INDICATORS }),
+      toggleWatchlistSymbol: (symbol) =>
+        set((state) => {
+          const norm = normalizeWatchlistSymbol(symbol);
+          if (!norm) return state;
+          const exists = state.watchlistSymbols.includes(norm);
+          return {
+            watchlistSymbols: exists
+              ? state.watchlistSymbols.filter((s) => s !== norm)
+              : [...state.watchlistSymbols, norm],
+          };
+        }),
+      setWatchlistSymbols: (symbols) =>
+        set({
+          watchlistSymbols: Array.from(
+            new Set(symbols.map(normalizeWatchlistSymbol).filter(Boolean))
+          ),
+        }),
+      resetWatchlist: () => set({ watchlistSymbols: DEFAULT_WATCHLIST_SYMBOLS }),
       setToolProfile: (toolProfile) => {
         const panels = PROFILE_PANELS[toolProfile];
         // The liquidity workspace shows resting depth; the others start without it.
@@ -146,6 +199,7 @@ export const useUIStore = create<UIStore>()(
         heatmap: state.heatmap,
         footprintMode: state.footprintMode,
         indicators: state.indicators,
+        watchlistSymbols: state.watchlistSymbols,
       }),
       migrate: () => ({}) as UIStore,
       merge: (persisted, current) => {
@@ -156,6 +210,9 @@ export const useUIStore = create<UIStore>()(
           panels: { ...current.panels, ...(saved.panels ?? {}) },
           indicators: { ...DEFAULT_INDICATORS, ...(saved.indicators ?? {}) },
           heatmap: { ...current.heatmap, ...(saved.heatmap ?? {}) },
+          watchlistSymbols: Array.isArray(saved.watchlistSymbols)
+            ? Array.from(new Set(saved.watchlistSymbols.map(normalizeWatchlistSymbol).filter(Boolean)))
+            : current.watchlistSymbols,
         };
       },
     }

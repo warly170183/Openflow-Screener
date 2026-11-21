@@ -1,5 +1,6 @@
 import {
   analyzeHighVolumeNodes,
+  analyzeVolumeProfileSR,
   applyTradeToCandle,
   computeVolumeProfile,
   createEmptyCandle,
@@ -108,24 +109,64 @@ describe("Volume-at-Price HVN indicator", () => {
     expect(analyzeHighVolumeNodes(flat, 0.65, 10).nodes).toEqual([]);
   });
 
-  test("uiStore toggles HVN highlight and threshold cleanly", () => {
+  test("classifies horizontal Volume Profile HVN zones into Support, Resistance, Pivot, and LVN", () => {
+    const candle = buildCandle([
+      { price: 64980, buy: 30, sell: 55 }, // 85 (deeper support)
+      { price: 65000, buy: 1, sell: 2 },   // 3 (LVN)
+      { price: 65020, buy: 25, sell: 60 }, // 85 (S1 nearest support)
+      { price: 65040, buy: 2, sell: 2 },   // 4 (LVN)
+      { price: 65060, buy: 55, sell: 45 }, // 100 (POC / pivot when price=65060)
+      { price: 65080, buy: 3, sell: 2 },   // 5 (LVN)
+      { price: 65100, buy: 62, sell: 28 }, // 90 (R1 nearest resistance)
+      { price: 65120, buy: 2, sell: 1 },   // 3 (LVN)
+      { price: 65140, buy: 50, sell: 25 }, // 75 (higher resistance)
+    ]);
+    const profile = computeVolumeProfile([candle], 0.7);
+    const sr = analyzeVolumeProfileSR(profile, 65060, 0.65, 20);
+
+    expect(sr.pivotZones).toHaveLength(1);
+    expect(sr.pivotZones[0].peakPrice).toBe(65060);
+
+    expect(sr.supportZones.map((z) => z.peakPrice)).toEqual([65020, 64980]);
+    expect(sr.nearestSupport?.peakPrice).toBe(65020);
+    expect(sr.nearestSupport?.role).toBe("support");
+    expect(sr.nearestSupport!.distancePct).toBeLessThan(0);
+
+    expect(sr.resistanceZones.map((z) => z.peakPrice)).toEqual([65100, 65140]);
+    expect(sr.nearestResistance?.peakPrice).toBe(65100);
+    expect(sr.nearestResistance?.role).toBe("resistance");
+    expect(sr.nearestResistance!.distancePct).toBeGreaterThan(0);
+
+    expect(sr.lvnLevels.map((l) => l.price)).toEqual([65000, 65040, 65080, 65120]);
+    expect(sr.zoneByPrice.get(65020)?.role).toBe("support");
+    expect(sr.zoneByPrice.get(65100)?.role).toBe("resistance");
+    expect(sr.nearestSupport!.strength).toBeGreaterThan(50);
+  });
+
+  test("uiStore toggles HVN highlight, VP S/R, and threshold cleanly", () => {
     useUIStore.getState().resetIndicators();
     expect(useUIStore.getState().indicators.hvnHighlight).toBe(DEFAULT_INDICATORS.hvnHighlight);
+    expect(useUIStore.getState().indicators.vpSupportResistance).toBe(true);
     expect(useUIStore.getState().indicators.hvnThreshold).toBe(0.65);
 
     useUIStore.getState().setIndicator("hvnHighlight", false);
+    useUIStore.getState().setIndicator("vpSupportResistance", false);
     expect(useUIStore.getState().indicators.hvnHighlight).toBe(false);
+    expect(useUIStore.getState().indicators.vpSupportResistance).toBe(false);
 
     useUIStore.getState().setIndicator("hvnHighlight", true);
+    useUIStore.getState().setIndicator("vpSupportResistance", true);
     useUIStore.getState().setIndicator("hvnThreshold", 0.75);
     useUIStore.getState().setIndicator("hvnColor", "#ff9f43");
 
     expect(useUIStore.getState().indicators.hvnHighlight).toBe(true);
+    expect(useUIStore.getState().indicators.vpSupportResistance).toBe(true);
     expect(useUIStore.getState().indicators.hvnThreshold).toBe(0.75);
     expect(useUIStore.getState().indicators.hvnColor).toBe("#ff9f43");
 
     useUIStore.getState().resetIndicators();
     expect(useUIStore.getState().indicators.hvnThreshold).toBe(0.65);
+    expect(useUIStore.getState().indicators.vpSupportResistance).toBe(true);
     expect(useUIStore.getState().indicators.hvnColor).toBeNull();
   });
 });

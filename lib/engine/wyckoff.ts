@@ -330,7 +330,31 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function wilderAdxSeries(
+export type AdxRegime = "strong-trend" | "trending" | "emerging" | "range-bound";
+export type AdxDirection = "bullish" | "bearish" | "neutral";
+export type AdxSlopeTrend = "increasing" | "decreasing" | "flat";
+
+export interface AdxTickTrajectory {
+  points: number[];
+  trend: AdxSlopeTrend;
+  netChange: number;
+  lastStepChange: number;
+}
+
+export interface AdxSnapshot {
+  adx: number;
+  plusDi: number;
+  minusDi: number;
+  adxDelta: number;
+  recentAdx: number[];
+  regime: AdxRegime;
+  direction: AdxDirection;
+  periodUsed: number;
+  barsCount: number;
+  lastTime: number | null;
+}
+
+export function wilderAdxSeries(
   bars: OhlcBar[],
   requestedPeriod = 14
 ): { adx: number[]; plusDi: number[]; minusDi: number[]; period: number } {
@@ -414,6 +438,115 @@ function wilderAdxSeries(
   }
 
   return { adx, plusDi, minusDi, period: p };
+}
+
+export function updateBarsWithLivePrice(bars: OhlcBar[], livePrice?: number): OhlcBar[] {
+  if (!bars.length || livePrice === undefined || !Number.isFinite(livePrice) || livePrice <= 0) {
+    return bars;
+  }
+  const lastIdx = bars.length - 1;
+  const last = bars[lastIdx];
+  const nextHigh = Math.max(last.high, livePrice);
+  const nextLow = Math.min(last.low, livePrice);
+  if (last.close === livePrice && last.high === nextHigh && last.low === nextLow) {
+    return bars;
+  }
+  const next = bars.slice();
+  next[lastIdx] = {
+    ...last,
+    close: livePrice,
+    high: nextHigh,
+    low: nextLow,
+  };
+  return next;
+}
+
+export function computeAdxTickTrajectory(rawPoints: number[]): AdxTickTrajectory {
+  const points = rawPoints.filter((v) => Number.isFinite(v)).slice(-5);
+  if (points.length < 2) {
+    return {
+      points,
+      trend: "flat",
+      netChange: 0,
+      lastStepChange: 0,
+    };
+  }
+  const first = points[0];
+  const prev = points[points.length - 2];
+  const last = points[points.length - 1];
+  const netChange = last - first;
+  const lastStepChange = last - prev;
+
+  let trend: AdxSlopeTrend = "flat";
+  if (netChange >= 0.08 || (netChange > 0.02 && lastStepChange > 0.01)) {
+    trend = "increasing";
+  } else if (netChange <= -0.08 || (netChange < -0.02 && lastStepChange < -0.01)) {
+    trend = "decreasing";
+  }
+
+  return {
+    points,
+    trend,
+    netChange,
+    lastStepChange,
+  };
+}
+
+export function computeAdxSnapshot(
+  bars: OhlcBar[],
+  livePrice?: number,
+  requestedPeriod = 14
+): AdxSnapshot {
+  const effectiveBars = updateBarsWithLivePrice(bars, livePrice);
+  const lastTime = effectiveBars.at(-1)?.openTime ?? null;
+  if (effectiveBars.length < 4) {
+    return {
+      adx: 0,
+      plusDi: 0,
+      minusDi: 0,
+      adxDelta: 0,
+      recentAdx: [],
+      regime: "range-bound",
+      direction: "neutral",
+      periodUsed: requestedPeriod,
+      barsCount: effectiveBars.length,
+      lastTime,
+    };
+  }
+
+  const series = wilderAdxSeries(effectiveBars, requestedPeriod);
+  const lastIdx = effectiveBars.length - 1;
+  const prevIdx = Math.max(0, lastIdx - 3);
+  const adx = series.adx[lastIdx] ?? 0;
+  const plusDi = series.plusDi[lastIdx] ?? 0;
+  const minusDi = series.minusDi[lastIdx] ?? 0;
+  const adxDelta = adx - (series.adx[prevIdx] ?? adx);
+  const recentAdx = series.adx.slice(-5);
+
+  const regime: AdxRegime =
+    adx >= 40
+      ? "strong-trend"
+      : adx >= 25
+        ? "trending"
+        : adx >= 20
+          ? "emerging"
+          : "range-bound";
+
+  const direction: AdxDirection =
+    plusDi - minusDi >= 2.5 ? "bullish" : minusDi - plusDi >= 2.5 ? "bearish" : "neutral";
+
+  return {
+    adx,
+    plusDi,
+    minusDi,
+    adxDelta,
+    recentAdx,
+    regime,
+    direction,
+    periodUsed: series.period,
+    barsCount: effectiveBars.length,
+    lastTime,
+  };
 }
 
 function phaseNameFor(code: string, stage: WyckoffMacroStage): string {

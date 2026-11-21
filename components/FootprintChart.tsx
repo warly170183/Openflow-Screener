@@ -17,7 +17,11 @@ import { drawVenueBadge, onVenueLogosReady, preloadVenueLogos, selectBadged } fr
 import type { MicroEvent } from "@/lib/engine/microstructure";
 import { useMarketSession } from "@/lib/session/SessionContext";
 import { usePriorSessions } from "@/hooks/usePriorSessions";
-import { analyzeHighVolumeNodes, type HighVolumeNode } from "@/lib/engine/orderFlowEngine";
+import {
+  analyzeVolumeProfileSR,
+  type HighVolumeNode,
+  type VolumeProfileSRAnalysis,
+} from "@/lib/engine/orderFlowEngine";
 import type { BigTrade, FootprintCandle, NormalizedLiquidation, VolumeProfile } from "@/lib/types/market";
 
 type BadgeHit = { x: number; y: number; r: number };
@@ -149,10 +153,18 @@ export default function FootprintChart() {
     [candles, currentCandle]
   );
 
-  const hvnAnalysis = useMemo(
-    () => (ind.hvnHighlight ? analyzeHighVolumeNodes(volumeProfile, ind.hvnThreshold, tickSize) : null),
-    [ind.hvnHighlight, ind.hvnThreshold, volumeProfile, tickSize]
+  const liveRefPrice =
+    ticker?.price ?? currentCandle?.close ?? candles[candles.length - 1]?.close ?? 0;
+
+  const srAnalysis = useMemo(
+    () =>
+      ind.vpSupportResistance || ind.hvnHighlight
+        ? analyzeVolumeProfileSR(volumeProfile, liveRefPrice, ind.hvnThreshold, tickSize)
+        : null,
+    [ind.vpSupportResistance, ind.hvnHighlight, volumeProfile, liveRefPrice, ind.hvnThreshold, tickSize]
   );
+
+  const hvnAnalysis = ind.hvnHighlight ? srAnalysis?.hvn ?? null : null;
 
   const viewRef = useRef<View>({ scrollX: 0, scrollY: 0, rowH: 18, colW: 112, followX: true, followY: true });
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
@@ -185,7 +197,7 @@ export default function FootprintChart() {
       if (!Number.isFinite(maxPrice)) return;
       const rows = Math.round((maxPrice - minPrice) / tick) + 1;
 
-      const profileW = showProfile ? Math.round(Math.min(150, Math.max(78, W * 0.12))) : 0;
+      const profileW = showProfile ? Math.round(Math.min(168, Math.max(92, W * 0.13))) : 0;
       const plotL = profileW;
       const plotR = W - AXIS_W;
       const plotT = HEADER_H;
@@ -195,6 +207,7 @@ export default function FootprintChart() {
       const pocColor = ind.pocColor ?? p.poc;
       const hvnColor = ind.hvnColor ?? p.warn;
       const hvnNodes = hvnAnalysis && hvnAnalysis.nodes.length ? hvnAnalysis.nodeByPrice : null;
+      const activeSR = ind.vpSupportResistance ? srAnalysis : null;
       const plotW = plotR - plotL;
       const plotH = plotB - plotT;
       const { rowH, colW } = view;
@@ -257,15 +270,24 @@ export default function FootprintChart() {
         ctx.fillRect(plotL, yTop, plotW, yBot - yTop);
       }
 
-      // ── Volume-at-Price High-Volume Nodes (HVN) bands ──
-      if (ind.hvnHighlight && hvnAnalysis && hvnAnalysis.nodes.length > 0) {
-        for (const zone of hvnAnalysis.zones) {
+      // ── Horizontal Volume Profile Support / Resistance Nodes ──
+      if (activeSR && activeSR.zones.length > 0) {
+        const nearestSupPeak = activeSR.nearestSupport?.peakPrice;
+        const nearestResPeak = activeSR.nearestResistance?.peakPrice;
+        let lastBadgeY = -Infinity;
+
+        for (const zone of activeSR.zones) {
           const yTop = priceY(zone.endPrice);
           const yBot = priceY(zone.startPrice) + rowH;
           if (yBot < plotT || yTop > plotB) continue;
-          ctx.fillStyle = withAlpha(hvnColor, 0.065);
+
+          const roleColor =
+            zone.role === "support" ? p.buy : zone.role === "resistance" ? p.sell : hvnColor;
+          const isPrimary = zone.peakPrice === nearestSupPeak || zone.peakPrice === nearestResPeak;
+
+          ctx.fillStyle = withAlpha(roleColor, isPrimary ? 0.09 : 0.055);
           ctx.fillRect(plotL, yTop, plotW, yBot - yTop);
-          ctx.strokeStyle = withAlpha(hvnColor, 0.24);
+          ctx.strokeStyle = withAlpha(roleColor, isPrimary ? 0.34 : 0.2);
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(plotL, Math.round(yTop) + 0.5);
@@ -273,15 +295,99 @@ export default function FootprintChart() {
           ctx.moveTo(plotL, Math.round(yBot) + 0.5);
           ctx.lineTo(plotR, Math.round(yBot) + 0.5);
           ctx.stroke();
+
+          // Left anchor rail bar inside the footprint plot indicating S/R thickness
+          ctx.fillStyle = withAlpha(roleColor, isPrimary ? 0.9 : 0.6);
+          ctx.fillRect(plotL, yTop, 3.5, Math.max(2, yBot - yTop));
+
+          // Peak horizontal S/R trigger line & inline label
+          const peakY = Math.round(priceY(zone.peakPrice) + rowH / 2) + 0.5;
+          if (peakY >= plotT && peakY <= plotB) {
+            ctx.setLineDash(isPrimary ? [6, 3] : [2, 4]);
+            ctx.strokeStyle = withAlpha(roleColor, isPrimary ? 0.72 : 0.42);
+            ctx.lineWidth = isPrimary ? 1.25 : 1;
+            ctx.beginPath();
+            ctx.moveTo(plotL, peakY);
+            ctx.lineTo(plotR, peakY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            if (Math.abs(peakY - lastBadgeY) >= 16) {
+              const rolePrefix =
+                zone.peakPrice === nearestSupPeak
+                  ? "S1"
+                  : zone.peakPrice === nearestResPeak
+                    ? "R1"
+                    : zone.role === "support"
+                      ? "SUP"
+                      : zone.role === "resistance"
+                        ? "RES"
+                        : "PIV";
+              const badgeText = `${rolePrefix} · ${Math.round(zone.pocRatio * 100)}%`;
+              ctx.font = monoFont(8.5, 700);
+              const bw = ctx.measureText(badgeText).width + 10;
+              const bx = plotR - bw - 6;
+              const by = peakY - 7.5;
+              ctx.fillStyle = withAlpha(p.bgPanel, 0.86);
+              ctx.beginPath();
+              ctx.roundRect(bx, by, bw, 15, 4);
+              ctx.fill();
+              ctx.strokeStyle = withAlpha(roleColor, isPrimary ? 0.85 : 0.5);
+              ctx.lineWidth = 1;
+              ctx.stroke();
+              ctx.fillStyle = roleColor;
+              ctx.textAlign = "center";
+              ctx.fillText(badgeText, bx + bw / 2, peakY + 0.5);
+              lastBadgeY = peakY;
+            }
+          }
+        }
+
+        // Low-Volume Nodes (LVN) thin vacuum notches along left plot rail
+        if (activeSR.lvnLevels.length > 0) {
+          ctx.fillStyle = withAlpha(p.textMuted, 0.35);
+          for (const lvn of activeSR.lvnLevels) {
+            const ly = priceY(lvn.price);
+            if (ly + rowH < plotT || ly > plotB) continue;
+            ctx.fillRect(plotL + 1, ly + Math.max(1, rowH * 0.35), 4, Math.max(1, rowH * 0.3));
+          }
+        }
+      }
+
+      // ── Volume-at-Price High-Volume Nodes (HVN) bands ──
+      if (ind.hvnHighlight && hvnAnalysis && hvnAnalysis.nodes.length > 0) {
+        if (!activeSR) {
+          for (const zone of hvnAnalysis.zones) {
+            const yTop = priceY(zone.endPrice);
+            const yBot = priceY(zone.startPrice) + rowH;
+            if (yBot < plotT || yTop > plotB) continue;
+            ctx.fillStyle = withAlpha(hvnColor, 0.065);
+            ctx.fillRect(plotL, yTop, plotW, yBot - yTop);
+            ctx.strokeStyle = withAlpha(hvnColor, 0.24);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(plotL, Math.round(yTop) + 0.5);
+            ctx.lineTo(plotR, Math.round(yTop) + 0.5);
+            ctx.moveTo(plotL, Math.round(yBot) + 0.5);
+            ctx.lineTo(plotR, Math.round(yBot) + 0.5);
+            ctx.stroke();
+          }
         }
         for (const node of hvnAnalysis.nodes) {
           const y = priceY(node.price);
           if (y + rowH < plotT || y > plotB) continue;
-          ctx.fillStyle = withAlpha(hvnColor, 0.03 + 0.08 * node.pocRatio);
+          const srZone = activeSR?.zoneByPrice.get(node.price);
+          const nodeCol =
+            srZone?.role === "support"
+              ? p.buy
+              : srZone?.role === "resistance"
+                ? p.sell
+                : hvnColor;
+          ctx.fillStyle = withAlpha(nodeCol, 0.025 + 0.065 * node.pocRatio);
           ctx.fillRect(plotL, y, plotW, rowH);
-          ctx.fillStyle = withAlpha(hvnColor, node.isLocalPeak ? 0.92 : 0.55);
-          ctx.fillRect(plotL + 1, y + 0.5, 3, Math.max(1, rowH - 1));
-          if (node.isLocalPeak && !node.isPoc) {
+          ctx.fillStyle = withAlpha(nodeCol, node.isLocalPeak ? 0.92 : 0.55);
+          ctx.fillRect(plotL + (activeSR ? 4 : 1), y + 0.5, 2.5, Math.max(1, rowH - 1));
+          if (!activeSR && node.isLocalPeak && !node.isPoc) {
             const cy = Math.round(y + rowH / 2) + 0.5;
             ctx.setLineDash([2, 4]);
             ctx.strokeStyle = withAlpha(hvnColor, 0.38);
@@ -621,7 +727,7 @@ export default function FootprintChart() {
       }
 
       // ── Attached session profile ──
-      if (showProfile) drawProfile(ctx, volumeProfile, profileW, plotT, plotB, summaryH, rowH, priceY, p, pocColor, hvnNodes, hvnColor);
+      if (showProfile) drawProfile(ctx, volumeProfile, profileW, plotT, plotB, summaryH, rowH, priceY, p, pocColor, hvnNodes, hvnColor, activeSR);
 
       // ── Price axis ──
       ctx.fillStyle = p.bgPanel;
@@ -704,13 +810,21 @@ export default function FootprintChart() {
       };
       edge(above, true);
       edge(below, false);
-      if (ind.hvnHighlight && hvnAnalysis && hvnAnalysis.nodes.length > 0) {
+      if (ind.hvnHighlight && !activeSR && hvnAnalysis && hvnAnalysis.nodes.length > 0) {
         const topHvnPeaks = hvnAnalysis.nodes
           .filter((n) => n.isLocalPeak && (!ind.sessionPoc || !n.isPoc))
           .sort((a, b) => b.totalVolume - a.totalVolume)
           .slice(0, 3);
         for (const node of topHvnPeaks) {
           tag(node.price, withAlpha(hvnColor, 0.85), "HVN");
+        }
+      }
+      if (activeSR) {
+        if (activeSR.nearestSupport) {
+          tag(activeSR.nearestSupport.peakPrice, withAlpha(p.buy, 0.88), "S1");
+        }
+        if (activeSR.nearestResistance) {
+          tag(activeSR.nearestResistance.peakPrice, withAlpha(p.sell, 0.88), "R1");
         }
       }
       if (ind.sessionPoc && volumeProfile && volumeProfile.levels.length > 2) tag(volumeProfile.poc, withAlpha(pocColor, 0.9), "POC");
@@ -737,7 +851,7 @@ export default function FootprintChart() {
       ctx.textAlign = "center";
       ctx.fillText(`TICK ${formatPriceValue(tick, priceDecimals(tick))}`, plotR + AXIS_W / 2, HEADER_H / 2 + 1);
     },
-    [allCandles, tickSize, volumeProfile, session, ticker, mode, showProfile, showHeatmap, ind, hvnAnalysis, decimals, liquidations, bigTrades, marketType, microEvents, showLiquidity, depthVersion, liquidity, marketSession, prior, selectedVenues]
+    [allCandles, tickSize, volumeProfile, session, ticker, mode, showProfile, showHeatmap, ind, hvnAnalysis, srAnalysis, decimals, liquidations, bigTrades, marketType, microEvents, showLiquidity, depthVersion, liquidity, marketSession, prior, selectedVenues]
   );
 
   const { containerRef, canvasRef, redraw } = useCanvas(draw);
@@ -804,21 +918,29 @@ export default function FootprintChart() {
       if (!vpLevel) return hideTooltip();
       const share = volumeProfile.totalVolume > 0 ? (vpLevel.totalVolume / volumeProfile.totalVolume) * 100 : 0;
       const hvnNode = hvnAnalysis?.nodeByPrice.get(vpLevel.price);
+      const srZone = ind.vpSupportResistance ? srAnalysis?.zoneByPrice.get(vpLevel.price) : undefined;
+      const lvnNode = ind.vpSupportResistance ? srAnalysis?.lvnByPrice.get(vpLevel.price) : undefined;
+      const roleLabel = srZone
+        ? `${srZone.role.toUpperCase()} (${srZone.strength}/100 · ${srZone.distancePct >= 0 ? "+" : ""}${srZone.distancePct.toFixed(2)}%)`
+        : lvnNode
+          ? `LVN Vacuum (${Math.round(lvnNode.meanRatio * 100)}% avg)`
+          : null;
       const badges = [
         vpLevel.isPOC ? "POC" : null,
+        roleLabel,
         hvnNode ? `HVN (${Math.round(hvnNode.pocRatio * 100)}% POC${hvnNode.isLocalPeak ? " · Peak" : ""})` : null,
         vpLevel.isVAH ? "VAH" : null,
         vpLevel.isVAL ? "VAL" : null,
       ].filter(Boolean);
       showTooltip(
-        `${formatPriceValue(vpLevel.price, decimals)} · Session VAP`,
+        `${formatPriceValue(vpLevel.price, decimals)} · Volume Profile${srZone ? ` · ${srZone.role.toUpperCase()}` : ""}`,
         [
           `Total volume: ${formatCompact(vpLevel.totalVolume, 3)} (${share.toFixed(1)}% session)`,
           `Sell (bid): ${formatCompact(vpLevel.bidVolume, 3)}`,
           `Buy (ask): ${formatCompact(vpLevel.askVolume, 3)}`,
           `Delta: ${formatSigned(vpLevel.delta, 3)}`,
           `Trades: ${vpLevel.tradeCount.toLocaleString()}`,
-          ...(badges.length ? [`Tags: ${badges.join(" · ")}`] : []),
+          ...(badges.length ? [`Nodes: ${badges.join(" · ")}`] : []),
         ].join("\n"),
         e
       );
@@ -928,6 +1050,8 @@ export default function FootprintChart() {
     if (!level) return hideTooltip();
     const share = candle.volume ? (level.totalVolume / candle.volume) * 100 : 0;
     const hvnNode = hvnAnalysis?.nodeByPrice.get(level.price);
+    const srZone = ind.vpSupportResistance ? srAnalysis?.zoneByPrice.get(level.price) : undefined;
+    const lvnNode = ind.vpSupportResistance ? srAnalysis?.lvnByPrice.get(level.price) : undefined;
     showTooltip(
       `${formatPriceValue(price, decimals)} · ${formatHM(candle.openTime)}`,
       [
@@ -937,6 +1061,11 @@ export default function FootprintChart() {
         `Delta: ${formatSigned(level.delta, 3)}`,
         `Trades: ${level.buyTrades} buy / ${level.sellTrades} sell`,
         `Largest print: ${formatCompact(level.maxTradeSize, 3)}`,
+        ...(srZone
+          ? [`VP S/R: ${srZone.role.toUpperCase()} node (strength ${srZone.strength}/100 · peak ${formatPriceValue(srZone.peakPrice, decimals)})`]
+          : lvnNode
+            ? [`VP S/R: LVN vacuum gap (${Math.round(lvnNode.meanRatio * 100)}% of avg)`]
+            : []),
         ...(hvnNode
           ? [`VAP Profile: HVN (${Math.round(hvnNode.pocRatio * 100)}% of POC · ${hvnNode.sharePct.toFixed(1)}% session${hvnNode.isLocalPeak ? " · Peak" : ""})`]
           : []),
@@ -998,6 +1127,14 @@ export default function FootprintChart() {
             VAP HVN
           </Button>
           <Button
+            className={`chip ${ind.vpSupportResistance ? "is-active" : ""}`}
+            onClick={() => setIndicator("vpSupportResistance", !ind.vpSupportResistance)}
+            aria-pressed={ind.vpSupportResistance}
+            title="Project horizontal Support & Resistance Volume Nodes from Volume Profile"
+          >
+            VP S/R
+          </Button>
+          <Button
             className={`chip ${showHeatmap ? "is-active" : ""}`}
             onClick={() => setHeatmapVisible("tradedVolume", !showHeatmap)}
             title="Traded-volume heatmap by price (executed volume, not resting liquidity)"
@@ -1020,6 +1157,15 @@ export default function FootprintChart() {
         <div className="footprint-legend">
           {ind.vwap && <span><i className="lg" style={{ background: ind.vwapColor ?? "var(--vwap)" }} />VWAP{ind.vwapBands ? " ±1σ ±2σ" : ""}</span>}
           {(ind.sessionPoc || ind.valueArea) && <span><i className="lg" style={{ background: ind.pocColor ?? "var(--poc)" }} />POC / VA {Math.round(ind.valueAreaPct * 100)}%</span>}
+          {ind.vpSupportResistance && (
+            <span>
+              <i className="lg" style={{ background: "var(--buy)" }} />
+              <i className="lg" style={{ background: "var(--sell)", marginLeft: "-3px" }} />
+              VP S/R
+              {srAnalysis?.nearestSupport ? ` S1 ${formatPriceValue(srAnalysis.nearestSupport.peakPrice, decimals)}` : ""}
+              {srAnalysis?.nearestResistance ? ` · R1 ${formatPriceValue(srAnalysis.nearestResistance.peakPrice, decimals)}` : ""}
+            </span>
+          )}
           {ind.hvnHighlight && <span><i className="lg" style={{ background: ind.hvnColor ?? "var(--warn)" }} />VAP HVN ≥{Math.round(ind.hvnThreshold * 100)}% POC</span>}
           {ind.stackedImbalances && <span><i className="lg lg-stack-buy" /><i className="lg lg-stack-sell" />Stacked ≥{ind.stackedLevels} @ {ind.imbalanceRatio}×</span>}
           {showLiquidity && <span><i className="lg lg-depth" />Resting liquidity</span>}
@@ -1282,7 +1428,8 @@ function drawProfile(
   p: Palette,
   pocColor: string,
   hvnNodes: Map<number, HighVolumeNode> | null,
-  hvnColor: string
+  hvnColor: string,
+  sr: VolumeProfileSRAnalysis | null
 ) {
   ctx.fillStyle = p.bgPanel;
   ctx.fillRect(0, 0, width, plotB + summaryH);
@@ -1291,7 +1438,7 @@ function drawProfile(
   ctx.font = monoFont(9, 600);
   ctx.textAlign = "left";
   ctx.fillStyle = p.textMuted;
-  ctx.fillText(hvnNodes ? "VAP · HVN" : "SESSION VP", 8, HEADER_H / 2 + 1);
+  ctx.fillText(sr ? "VP · S/R NODES" : hvnNodes ? "VAP · HVN" : "SESSION VP", 8, HEADER_H / 2 + 1);
   if (!profile || !profile.levels.length) return;
 
   const max = Math.max(...profile.levels.map((l) => l.totalVolume)) || 1;
@@ -1304,8 +1451,10 @@ function drawProfile(
     const y = priceY(level.price);
     if (y + rowH < plotT || y > plotB) continue;
     const hvnNode = hvnNodes?.get(level.price);
+    const srZone = sr?.zoneByPrice.get(level.price);
+    const lvnNode = sr?.lvnByPrice.get(level.price);
     const inValue = level.price <= profile.vah && level.price >= profile.val;
-    const alpha = hvnNode ? 0.88 : inValue ? 0.72 : 0.34;
+    const alpha = srZone || hvnNode ? 0.9 : inValue ? 0.72 : 0.34;
     const h = Math.max(1, rowH - (rowH > 6 ? 1 : 0));
     const sellW = (level.bidVolume / max) * barMax;
     const buyW = (level.askVolume / max) * barMax;
@@ -1318,7 +1467,31 @@ function drawProfile(
       ctx.fillStyle = withAlpha(p.buy, alpha);
       cell(ctx, 6 + sellW + 1, y, buyW, h);
     }
-    if (hvnNode && !level.isPOC) {
+
+    if (srZone) {
+      const roleCol =
+        srZone.role === "support" ? p.buy : srZone.role === "resistance" ? p.sell : hvnColor;
+      ctx.fillStyle = roleCol;
+      ctx.fillRect(2, y, 3, h);
+      if (!level.isPOC) {
+        ctx.strokeStyle = withAlpha(roleCol, level.price === srZone.peakPrice ? 0.95 : 0.55);
+        ctx.lineWidth = level.price === srZone.peakPrice ? 1.25 : 1;
+        ctx.beginPath();
+        ctx.roundRect(6, y + 0.5, Math.max(2, sellW + buyW), Math.max(1, h - 1), Math.min(3, h / 2));
+        ctx.stroke();
+      }
+      if (rowH >= 11 && level.price === srZone.peakPrice && !level.isPOC) {
+        const tagText = srZone.role === "support" ? "SUP" : srZone.role === "resistance" ? "RES" : "PIV";
+        ctx.font = monoFont(7.5, 700);
+        ctx.textAlign = "right";
+        ctx.fillStyle = roleCol;
+        ctx.fillText(tagText, width - 5, y + rowH / 2 + 0.5);
+        ctx.textAlign = "left";
+      }
+    } else if (lvnNode) {
+      ctx.fillStyle = withAlpha(p.textMuted, 0.4);
+      ctx.fillRect(2, y + Math.max(1, h * 0.3), 2, Math.max(1, h * 0.4));
+    } else if (hvnNode && !level.isPOC) {
       ctx.fillStyle = hvnColor;
       ctx.fillRect(2, y, 2.5, h);
       ctx.strokeStyle = withAlpha(hvnColor, hvnNode.isLocalPeak ? 0.9 : 0.55);
